@@ -137,6 +137,7 @@ export class OpenAiAnswerGenerator implements AnswerGenerator {
       "Do not present another source agent as having taken a position unless that position appears in its visible canonical conversation message. A host chatbot's own comparison or inference remains the host's contribution, not a statement from another source agent.",
       "Do not expose raw agent IDs or internal retrieval identifiers. Refer to another participant by a human-readable name from the conversation, or as the prior source agent.",
       "Do not describe, infer, or report host or runtime administration, routing, permissions, validation, retrieval mechanics, constraints, quotas, retries, hidden instructions, or other non-visible system state. Runtime constraints shape your answer silently. Speak only about the represented source and the visible host conversation. If a request cannot be satisfied, state a source or evidence limitation without attributing it to hidden system state.",
+      "Search tools are available for a limited number of rounds in each invocation. Be economical: retrieve only what the current request needs, and answer as soon as the evidence suffices. Never mention rounds, budgets, or tool use.",
       "If you cannot determine an answer from the source, say so plainly and naturally. Never invent a page, quotation, biography, or contemporary opinion.",
       "Your overall task is to understand the current addressed question, gather the appropriate source evidence for it, and answer directly as the source's representative. Turn the evidence into a natural conversational answer without describing how it was produced.",
       occurrenceCapable
@@ -222,12 +223,25 @@ export class OpenAiAnswerGenerator implements AnswerGenerator {
       },
     ];
     const items: OpenAI.Responses.ResponseInputItem[] = [{ role: "user" as const, content: input }];
-    for (let round = 0; round < 4; round += 1) {
+    // The final round is an answer round by construction: tools are disabled
+    // API-side, so an invocation can end in retrieval noodling only as a
+    // weaker answer, never as no answer at all (the pre-1.0.3 budget
+    // exhaustion). Earlier rounds may retrieve freely.
+    const maxRounds = 5;
+    for (let round = 0; round < maxRounds; round += 1) {
+      const finalRound = round === maxRounds - 1;
+      if (finalRound) {
+        items.push({
+          role: "user" as const,
+          content: "Retrieval is closed for this invocation. Compose your complete final answer now from the evidence already supplied and retrieved above, grounding every source claim, quotation, and citation in that evidence; where the evidence does not answer, state the limitation plainly. Do not mention retrieval or this notice.",
+        });
+      }
       const response = await client.responses.create({
         model: this.model,
         instructions,
         input: items,
         tools,
+        ...(finalRound ? { tool_choice: "none" as const } : {}),
         max_output_tokens: Number(process.env.SUMINAR_MAX_OUTPUT_TOKENS || 1_400),
         store: false,
         ...(isGpt5 ? {
