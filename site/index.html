@@ -101,7 +101,10 @@
   }
 
   header { border-bottom: 1px solid var(--line); }
-  .nav { display: flex; align-items: center; gap: 1rem; padding: 1.1rem 0; }
+  /* vertical-only padding: .nav and .hero share the element with .wrap,
+     whose side gutters a padding shorthand would silently zero (found on
+     a phone, launch night). */
+  .nav { display: flex; align-items: center; gap: 1rem; padding-top: 1.1rem; padding-bottom: 1.1rem; }
   .lockup { display: inline-flex; align-items: center; gap: .6rem; text-decoration: none; color: inherit; }
   .wordmark { font-weight: 700; font-size: 1.25rem; letter-spacing: -0.02em; }
   .wordmark .dot { color: var(--accent); }
@@ -109,7 +112,7 @@
   .nav nav a { font-size: .875rem; font-weight: 600; text-decoration: none; color: var(--accent-contrast); }
   .nav nav a:hover { color: var(--accent); }
 
-  .hero { padding: 4.5rem 0 4rem; }
+  .hero { padding-top: 4.5rem; padding-bottom: 4rem; }
   .hero h1 {
     font-size: clamp(2rem, 5.5vw, 3.25rem);
     line-height: 1.08;
