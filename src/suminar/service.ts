@@ -18,6 +18,7 @@ export function createSuminarConversationService(
     answerGenerator?: AnswerGenerator;
     artifactReader?: ArtifactReader;
     wrapLocalInvoker?: (invoker: LocalAgentInvoker) => LocalAgentInvoker;
+    slowRetryCutoffMs?: number;
   } = {},
 ): ConversationService {
   const invoker = new LocalSourceAgent(
@@ -27,5 +28,6 @@ export function createSuminarConversationService(
   return new ConversationService(store, {
     allowPrivateOrigins: config.allowPrivateOrigins,
     localInvoker: options.wrapLocalInvoker ? options.wrapLocalInvoker(invoker) : invoker,
+    ...(options.slowRetryCutoffMs !== undefined ? { slowRetryCutoffMs: options.slowRetryCutoffMs } : {}),
   });
 }

@@ -19,6 +19,7 @@ import type {
   ConversationSession,
   ConversationSyncResult,
   ConversationTranscriptMessage,
+  RecoveredCanonicalTurn,
   CopiedVisibleConversationEvent,
   DisplayedAgentMessage,
   InputFidelityPolicy,
@@ -39,6 +40,10 @@ export interface LocalAgentInvoker {
 export interface ConversationServiceOptions {
   localInvoker: LocalAgentInvoker;
   allowPrivateOrigins?: boolean;
+  // A second generation attempt is only worth making while the whole call can
+  // still land inside a typical host MCP client's patience (~45-60s observed).
+  // After this many milliseconds, a failure surfaces instead of retrying.
+  slowRetryCutoffMs?: number;
 }
 
 export interface SyncableConversationEvent extends CopiedVisibleConversationEvent {
@@ -243,10 +248,12 @@ export class ConversationService {
   private readonly localInvoker: LocalAgentInvoker;
   private readonly transports: Record<"https" | "gateway", AgentTransport>;
   private readonly invocationsInFlight = new Set<string>();
+  private readonly slowRetryCutoffMs: number;
 
   constructor(readonly store: ConversationStore, options: ConversationServiceOptions) {
     this.federation = new FederationClient(options.allowPrivateOrigins ?? false);
     this.localInvoker = options.localInvoker;
+    this.slowRetryCutoffMs = options.slowRetryCutoffMs ?? 45_000;
     this.transports = {
       https: new HttpsAgentTransport(this.federation),
       gateway: new GatewayAgentTransport(),
@@ -383,6 +390,15 @@ export class ConversationService {
     if (consecutiveUserEvents) {
       conductNotices.push("Two consecutive user turns were synchronized with no host contribution between them. If you spoke between them, synchronize that visible host message too—but never canonical source-agent blocks or tool-recorded host addresses.");
     }
+    // Resupply the most recent canonical turns for the host's display check.
+    // The server cannot know whether a prior response reached the host (a
+    // client can time out after the answer was composed and stored), so the
+    // host — the only party that can see the visible conversation — decides:
+    // skip blocks already shown, display any that are missing.
+    const recentCanonicalTurns = stored
+      .filter((event) => event.fidelity === "canonical_source_agent" || event.fidelity === "canonical_host_address")
+      .slice(-3)
+      .map((event) => this.recoveredCanonicalTurn(conversation, event));
     return {
       conversationToken: conversation.conversationToken,
       previousCursor: input.afterCursor,
@@ -390,6 +406,22 @@ export class ConversationService {
       acceptedEvents,
       replayedEvents,
       ...(conductNotices.length ? { hostConductNotices: conductNotices } : {}),
+      ...(recentCanonicalTurns.length ? { recentCanonicalTurns } : {}),
+    };
+  }
+
+  private recoveredCanonicalTurn(conversation: ConversationSession, event: ConversationEvent): RecoveredCanonicalTurn {
+    const agent = event.speakerAgentId
+      ? conversation.agents.find((state) => state.agent.agentId === event.speakerAgentId)?.agent
+      : undefined;
+    return {
+      sequence: event.sequence,
+      speakerType: event.speakerType,
+      speakerDisplayName: event.speakerDisplayName,
+      authoredMessage: event.authoredMessage,
+      displayText: event.fidelity === "canonical_source_agent" && agent
+        ? displayText(agent, event.authoredMessage)
+        : event.authoredMessage,
     };
   }
 
@@ -619,7 +651,10 @@ export class ConversationService {
       // Generation and validation are stochastic: a draft can fail
       // quotation verification, or the upstream model call can fail
       // transiently. One clean re-attempt before the failure surfaces —
-      // retry-then-refuse, never refuse-first (and never repair).
+      // retry-then-refuse, never refuse-first (and never repair) — but only
+      // while the whole call can still land inside a host client's patience;
+      // after the cutoff a retry would outlive every observed client budget.
+      const acquisitionStart = Date.now();
       for (let attempt = 1; ; attempt += 1) {
         try {
           if (agent.transport === "local") {
@@ -637,7 +672,7 @@ export class ConversationService {
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           console.error(`[suminar] invocation attempt ${attempt} failed for @${agent.handle} (invocation ${envelope.invocationId}): ${detail}`);
-          if (attempt >= 2) throw error;
+          if (attempt >= 2 || Date.now() - acquisitionStart > this.slowRetryCutoffMs) throw error;
         }
       }
       const responseSequence = conversation.lastSequence + 1;

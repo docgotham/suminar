@@ -199,6 +199,20 @@ export interface DisplayedAgentMessage extends ResponseEnvelope {
   origin: string;
 }
 
+// A canonical turn resupplied for the host's display check. The server can
+// never know whether a prior response actually reached the host (a client
+// can time out after the answer was composed), so recent canonical turns
+// travel with every synchronization under a conditional display contract:
+// the host — the only party that can see the visible conversation — skips
+// what is already shown and displays what is missing.
+export interface RecoveredCanonicalTurn {
+  sequence: number;
+  speakerType: ConversationSpeakerType;
+  speakerDisplayName: string;
+  authoredMessage: string;
+  displayText: string;
+}
+
 export interface ConversationSyncResult {
   conversationToken: string;
   previousCursor: number;
@@ -206,6 +220,7 @@ export interface ConversationSyncResult {
   acceptedEvents: number;
   replayedEvents: number;
   hostConductNotices?: string[];
+  recentCanonicalTurns?: RecoveredCanonicalTurn[];
 }
 
 export interface ConversationInvocationResult {

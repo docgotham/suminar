@@ -795,6 +795,60 @@ describe("roomless host-conversation event stream", () => {
     expect(store.readConversationEvents(sync2.conversationToken).at(-1)?.speakerType).toBe("user");
   });
 
+  it("does not retry once the slow-retry cutoff has passed", async () => {
+    let calls = 0;
+    const flaky: AnswerGenerator = {
+      async generate() {
+        calls += 1;
+        if (calls === 1) throw new Error("slow transient failure");
+        return answer;
+      },
+    };
+    // Cutoff below any real elapsed time: the first failure must surface
+    // instead of retrying, because a retry would outlive a host client budget.
+    const service = createSuminarConversationService(config, store, { answerGenerator: flaky, slowRetryCutoffMs: -1 });
+    const sync = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "@scholar-2024 no retry after the cutoff")],
+    });
+    const failed = await service.invokeAgents({
+      conversationToken: sync.conversationToken,
+      throughCursor: sync.cursor,
+      targetHandles: ["scholar-2024"],
+    });
+    expect(calls).toBe(1);
+    expect(failed.messages).toEqual([]);
+    expect(failed.failures[0]).toMatchObject({ handle: "scholar-2024" });
+  });
+
+  it("resupplies recent canonical turns on synchronization for the host's display check", async () => {
+    const sync = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "@scholar-2024 say something recoverable")],
+    });
+    const invoked = await service.invokeAgents({
+      conversationToken: sync.conversationToken,
+      throughCursor: sync.cursor,
+      targetHandles: ["scholar-2024"],
+    });
+    expect(invoked.messages[0]?.authoredMessage).toBe(answer);
+    // The host's next sync — whatever cursor it survived with — carries the
+    // canonical turn back under the conditional display contract.
+    const followUp = await service.syncConversation({
+      conversationToken: sync.conversationToken,
+      afterCursor: invoked.throughCursor,
+      events: [copied("user", "a later user turn")],
+    });
+    expect(followUp.recentCanonicalTurns?.length).toBe(1);
+    expect(followUp.recentCanonicalTurns?.[0]).toMatchObject({
+      sequence: invoked.throughCursor,
+      speakerType: "source_agent",
+      authoredMessage: answer,
+    });
+    expect(followUp.recentCanonicalTurns?.[0]?.displayText).toContain("> **📄");
+    expect(followUp.recentCanonicalTurns?.[0]?.displayText).toContain(answer);
+  });
+
 });
 
 describe("bare assent ratification wording", () => {

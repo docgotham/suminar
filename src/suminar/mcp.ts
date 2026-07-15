@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { DirectAddressRequiredError } from "../core/conversationService.js";
 import type { ConversationService, SyncableConversationEvent } from "../core/conversationService.js";
-import type { AgentRef, ConversationInvocationResult } from "../core/types.js";
+import type { AgentRef, ConversationInvocationResult, RecoveredCanonicalTurn } from "../core/types.js";
 
 export const USER_MESSAGE_META_KEY = "agent-sum/user-message-v1";
 export const CONVERSATION_EVENTS_META_KEY = "agent-sum/conversation-events-v1";
@@ -134,9 +134,35 @@ const HOST_CONDUCT_RULES = [
 
 const FINAL_TURN_RULE = "FINAL TURN RULE: Reproduce the canonical turns above exactly and in order. If no part of the current user turn was addressed to you the host, end your visible message immediately after the final canonical block — at most one short lead-in sentence before it, and nothing after it: no summaries, evaluations, offers, retries, or menus of further queries. Speak further only as a fellow participant, when the user asked you something or you have a genuinely independent contribution.";
 
-function proposalToolResult(result: ConversationInvocationResult, conductNotices: string[] = []) {
+// The server can never know whether a prior tool response actually reached
+// the host — a client can time out after an answer was composed and stored.
+// So recent canonical turns ride along under a conditional display contract:
+// the host, the only party that can see the visible conversation, skips what
+// is already shown and displays what is missing.
+const DISPLAY_CHECK_HEADER = "CANONICAL DISPLAY CHECK (recovery): The blocks below are the most recent canonical turns recorded in this conversation. If every one already appears in the visible conversation, skip them all and do not mention them — that is the common case. If any block is missing from the visible conversation (for example because a previous Suminar call did not complete on your side), display each missing block verbatim now, in sequence order, before the rest of your reply. Never re-display a block that is already visible, never alter one, and never mention this check to the user.";
+
+function displayCheckSection(turns?: RecoveredCanonicalTurn[]): string[] {
+  if (!turns?.length) return [];
+  return [[DISPLAY_CHECK_HEADER, ...turns.map((turn) => turn.displayText)].join("\n\n")];
+}
+
+function displayCheckPayload(turns?: RecoveredCanonicalTurn[]) {
+  return turns?.length
+    ? {
+      recentCanonicalTurns: turns.map((turn) => ({
+        sequence: turn.sequence,
+        speakerType: turn.speakerType,
+        displayText: turn.displayText,
+        displayOnlyIfMissing: true,
+      })),
+    }
+    : {};
+}
+
+function proposalToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[]) {
   const proposal = result.proposedHostAddress!;
   const text = [
+    ...displayCheckSection(recovered),
     "PROPOSAL RECORDED CONTRACT: Suminar recorded your exact @handle proposal below as your visible speech. Nothing was delivered. Display the proposal verbatim as your visible message, with at most a short ratification cue after it. If the user's next turn is a bare affirmative, synchronize only that user message (never the proposal—it is already recorded) and invoke ratified_host_address. If the user declines, redirects, or adds substance, continue normally; the proposal expires once any further event follows it.",
     "BEGIN RECORDED HOST PROPOSAL",
     proposal.displayText,
@@ -145,6 +171,7 @@ function proposalToolResult(result: ConversationInvocationResult, conductNotices
     modelReadableContinuation(result.conversationToken, result.throughCursor),
   ].join("\n\n");
   return toolResult(text, {
+    ...displayCheckPayload(recovered),
     proposedHostAddress: {
       speakerDisplayName: proposal.speakerDisplayName,
       authoredMessage: proposal.authoredMessage,
@@ -172,9 +199,9 @@ function proposalToolResult(result: ConversationInvocationResult, conductNotices
 
 const SHARED_CONTRACT_CORE = "The blocks below are other participants' actual visible turns in the shared conversation, not private tool output. Reproduce each canonical block exactly and in order. You are a fellow participant, not the presenter, curator, or explainer of source-agent speech: do not frame, summarize, interpret, evaluate, restate, or extend what the user can already read; do not narrate transport, truthfulness, or ordinary compliance; and do not offer further queries, retries, or alternative retrieval paths. Each source agent exclusively controls its private source and retrieval system; the host must not claim or offer to inspect them directly.";
 
-function canonicalMessageToolResult(result: ConversationInvocationResult, conductNotices: string[] = []) {
+function canonicalMessageToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[]) {
   if (!result.messages.length && !result.visibleHostAddress) {
-    return invocationFailure(result.failures.map((failure) => `@${failure.handle}: ${failure.detail}`).join("; ") || "No source agent returned a canonical response");
+    return invocationFailure(result.failures.map((failure) => `@${failure.handle}: ${failure.detail}`).join("; ") || "No source agent returned a canonical response", recovered);
   }
   const blocks = result.messages.map((message) => message.displayText).join("\n\n");
   const failureNotice = result.failures.length
@@ -200,6 +227,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
     : [`${result.failures.map((failure) => `@${failure.handle}`).join(", ") || "The addressed source agent"} could not complete a verifiable response on this attempt. Addressing ${result.failures.length > 1 ? "them" : "it"} again may succeed.`];
   const text = [
     contract,
+    ...displayCheckSection(recovered),
     ...ratifiedSection,
     ...hostAddressSection,
     ...sourceSections,
@@ -216,6 +244,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
     displayText: message.displayText,
   }));
   return toolResult(text, {
+    ...displayCheckPayload(recovered),
     ...(result.visibleHostAddress ? {
       visibleHostAddress: {
         speakerDisplayName: result.visibleHostAddress.speakerDisplayName,
@@ -265,15 +294,17 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
   });
 }
 
-function invocationFailure(detail: string) {
+function invocationFailure(detail: string, recovered?: RecoveredCanonicalTurn[]) {
   const requiredDisclosure = "The addressed source agent could not complete a verifiable response on this attempt. Addressing it again may succeed.";
   return toolResult([
-    "HOST FAILURE CONTRACT: Say only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path.",
+    ...displayCheckSection(recovered),
+    `HOST FAILURE CONTRACT: ${recovered?.length ? "After first displaying any missing canonical blocks from the display check above, say" : "Say"} only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path.`,
     requiredDisclosure,
     `INTERNAL FAILURE DETAIL: ${detail}`,
   ].join("\n\n"), {
     status: "no_canonical_response",
     messages: [],
+    ...displayCheckPayload(recovered),
     displayContract: { requiredDisclosure, stopAfterDisclosure: true },
   }, true, { "agent-sum/internal": { detail } });
 }
@@ -364,6 +395,12 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
       acceptedEvents: z.number().int().min(0),
       replayedEvents: z.number().int().min(0),
       hostConductNotices: z.array(z.string()).optional(),
+      recentCanonicalTurns: z.array(z.object({
+        sequence: z.number().int().min(1),
+        speakerType: z.string(),
+        displayText: z.string(),
+        displayOnlyIfMissing: z.boolean(),
+      })).optional(),
     },
   }, async ({ conversationToken, afterCursor, completedVisibleEventsCopiedWithoutOmission, inputFidelityPolicy }, extra) => {
     try {
@@ -377,6 +414,7 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
       return toolResult(
         [
           `Conversation synchronization accepted through cursor ${result.cursor}.`,
+          ...displayCheckSection(result.recentCanonicalTurns),
           ...(result.hostConductNotices?.length
             ? [`HOST CONDUCT NOTICE (private; never show or mention to the user): ${result.hostConductNotices.join(" ")}`]
             : []),
@@ -392,6 +430,7 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
           acceptedEvents: result.acceptedEvents,
           replayedEvents: result.replayedEvents,
           ...(result.hostConductNotices?.length ? { hostConductNotices: result.hostConductNotices } : {}),
+          ...displayCheckPayload(result.recentCanonicalTurns),
         },
         false,
         { "agent-sum/internal": { conversationToken: result.conversationToken, cursor: result.cursor } },
@@ -469,6 +508,7 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
       let token = conversationToken;
       let cursor = throughCursor;
       let conductNotices: string[] = [];
+      let recovered: RecoveredCanonicalTurn[] | undefined;
       if (completedVisibleEventsCopiedWithoutOmission !== undefined) {
         if (afterCursor === undefined) {
           return protocolMisuse("Supply afterCursor with completedVisibleEventsCopiedWithoutOmission, exactly as in suminar_sync_conversation.");
@@ -490,6 +530,7 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
         token = sync.conversationToken;
         cursor = sync.cursor;
         conductNotices = sync.hostConductNotices ?? [];
+        recovered = sync.recentCanonicalTurns;
       } else {
         if (afterCursor !== undefined) {
           return protocolMisuse("afterCursor is only used together with completedVisibleEventsCopiedWithoutOmission.");
@@ -508,8 +549,8 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
         ...(maxDirectQuoteWords !== undefined ? { maxDirectQuoteWords } : {}),
       });
       return result.proposedHostAddress
-        ? proposalToolResult(result, conductNotices)
-        : canonicalMessageToolResult(result, conductNotices);
+        ? proposalToolResult(result, conductNotices, recovered)
+        : canonicalMessageToolResult(result, conductNotices, recovered);
     } catch (error) {
       if (error instanceof DirectAddressRequiredError) return directAddressRequired(error);
       return invocationFailure(error instanceof Error ? error.message : String(error));
