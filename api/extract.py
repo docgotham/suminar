@@ -15,25 +15,25 @@ import hashlib
 import json
 import os
 import re
-import signal
+import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 MAX_BYTES = 256 * 1024 * 1024
-WATCHDOG_SECONDS = 230  # inside both the platform's 300s kill and Node's 240s abort
+WATCHDOG_SECONDS = 220  # inside both the platform's 300s kill and Node's 240s abort
 
 # Progress marker so a timeout names the exact grinding stage instead of
 # dying silently and orphaning the document in "processing" (observed live,
 # 2026-07-15: one journal PDF ground past the function budget with no trace).
+# The runtime executes handlers in a worker thread, so SIGALRM is unavailable
+# ("signal only works in main thread"); the watchdog is a joined worker
+# thread instead, with a cooperative deadline check inside the page loop.
 PROGRESS = {"stage": "start"}
 
 
 class ExtractionTimeout(Exception):
     pass
-
-
-def _watchdog(signum, frame):  # noqa: ARG001
-    raise ExtractionTimeout(f"extraction timed out during: {PROGRESS['stage']}")
 
 
 def clean_text(text: str) -> str:
@@ -53,8 +53,13 @@ def extract_pdf(data: bytes):
         document = fitz.open(stream=data, filetype="pdf")
     except Exception as exc:  # noqa: BLE001
         return [], "failed", {"error": str(exc), "pageCount": 0, "emptyPages": 0}
+    loop_deadline = time.monotonic() + WATCHDOG_SECONDS - 20
     for index in range(document.page_count):
         PROGRESS["stage"] = f"pdf text extraction, page {index + 1} of {document.page_count}"
+        # A truncated extraction would silently misrepresent the source, so a
+        # cumulative grind raises instead of returning partial pages.
+        if time.monotonic() > loop_deadline:
+            raise ExtractionTimeout(f"extraction budget exhausted during: {PROGRESS['stage']}")
         try:
             text = clean_text(document.load_page(index).get_text("text") or "")
         except Exception as exc:  # noqa: BLE001
@@ -186,7 +191,6 @@ class handler(BaseHTTPRequestHandler):
         if not secret or self.headers.get("x-suminar-extract-secret") != secret:
             self._send(401, {"error": "unauthorized"})
             return
-        watchdog_armed = hasattr(signal, "SIGALRM")
         try:
             length = int(self.headers.get("content-length") or 0)
             request = json.loads(self.rfile.read(length) or b"{}")
@@ -195,12 +199,24 @@ class handler(BaseHTTPRequestHandler):
             if not isinstance(source_url, str) or kind not in ("pdf", "docx"):
                 self._send(400, {"error": "invalid_request", "detail": "sourceUrl and kind (pdf|docx) are required"})
                 return
-            if watchdog_armed:
-                signal.signal(signal.SIGALRM, _watchdog)
-                signal.alarm(WATCHDOG_SECONDS)
-            self._send(200, extract_payload(source_url, kind))
+            holder = {}
+
+            def run() -> None:
+                try:
+                    holder["result"] = extract_payload(source_url, kind)
+                except Exception as exc:  # noqa: BLE001
+                    holder["error"] = exc
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            worker.join(WATCHDOG_SECONDS)
+            if worker.is_alive():
+                # The worker cannot be killed; respond with the diagnosis and
+                # let the platform reap the instance.
+                self._send(500, {"error": "extraction_timeout", "detail": f"extraction timed out during: {PROGRESS['stage']}"})
+                return
+            if "error" in holder:
+                raise holder["error"]
+            self._send(200, holder["result"])
         except Exception as exc:  # noqa: BLE001
             self._send(500, {"error": "extraction_failed", "detail": str(exc)})
-        finally:
-            if watchdog_armed:
-                signal.alarm(0)
