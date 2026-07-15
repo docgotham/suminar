@@ -74,10 +74,15 @@ export class HostedIngestionService {
   }
 
   private async httpExtract(endpoint: string, secret: string, sourceUrl: string, kind: "pdf" | "docx"): Promise<ExtractionResult> {
+    // Bounded below the function's own 300s budget: if extraction grinds, the
+    // catch in processDocument must still get to run and record an honest
+    // "failed" — an aborted fetch beats a hard-killed function that orphans
+    // the document in "processing" forever (observed live, 2026-07-15).
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", "x-suminar-extract-secret": secret },
       body: JSON.stringify({ sourceUrl, kind }),
+      signal: AbortSignal.timeout(240_000),
     });
     if (!response.ok) throw new Error(`Extraction function returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
     return await response.json() as ExtractionResult;

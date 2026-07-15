@@ -8,3 +8,5 @@ tests/fixtures/generated/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+.vercel

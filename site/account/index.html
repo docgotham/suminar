@@ -653,7 +653,7 @@
   $("upload").addEventListener("submit", async (e) => {
     e.preventDefault();
     const file = $("up-file").files[0];
-    if (!file) return;
+    if (!file) { setStatus("up-status", "Choose a file first — the file selection may have been lost if the page reloaded.", true); return; }
     const form = new FormData();
     form.set("file", file);
     if ($("up-title").value.trim()) form.set("title", $("up-title").value.trim());

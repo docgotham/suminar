@@ -15,10 +15,25 @@ import hashlib
 import json
 import os
 import re
+import signal
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 MAX_BYTES = 256 * 1024 * 1024
+WATCHDOG_SECONDS = 230  # inside both the platform's 300s kill and Node's 240s abort
+
+# Progress marker so a timeout names the exact grinding stage instead of
+# dying silently and orphaning the document in "processing" (observed live,
+# 2026-07-15: one journal PDF ground past the function budget with no trace).
+PROGRESS = {"stage": "start"}
+
+
+class ExtractionTimeout(Exception):
+    pass
+
+
+def _watchdog(signum, frame):  # noqa: ARG001
+    raise ExtractionTimeout(f"extraction timed out during: {PROGRESS['stage']}")
 
 
 def clean_text(text: str) -> str:
@@ -39,6 +54,7 @@ def extract_pdf(data: bytes):
     except Exception as exc:  # noqa: BLE001
         return [], "failed", {"error": str(exc), "pageCount": 0, "emptyPages": 0}
     for index in range(document.page_count):
+        PROGRESS["stage"] = f"pdf text extraction, page {index + 1} of {document.page_count}"
         try:
             text = clean_text(document.load_page(index).get_text("text") or "")
         except Exception as exc:  # noqa: BLE001
@@ -129,6 +145,7 @@ def markdown_document(agent_id: str, status: str, pages) -> str:
 
 
 def extract_payload(source_url: str, kind: str) -> dict:
+    PROGRESS["stage"] = "downloading source"
     request = urllib.request.Request(source_url, headers={"user-agent": "suminar-extract/1"})
     with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 (signed URL from our own Storage)
         data = response.read(MAX_BYTES + 1)
@@ -138,9 +155,11 @@ def extract_payload(source_url: str, kind: str) -> dict:
     source_hash = hashlib.sha256(data).hexdigest()
     agent_id = f"agent_{source_hash[:24]}"
     if kind == "docx":
+        PROGRESS["stage"] = "docx text extraction"
         pages, status, report = extract_docx(data)
     else:
         pages, status, report = extract_pdf(data)
+    PROGRESS["stage"] = "chunking"
     chunks = build_chunks(agent_id, pages)
     return {
         "agentId": agent_id,
@@ -167,6 +186,7 @@ class handler(BaseHTTPRequestHandler):
         if not secret or self.headers.get("x-suminar-extract-secret") != secret:
             self._send(401, {"error": "unauthorized"})
             return
+        watchdog_armed = hasattr(signal, "SIGALRM")
         try:
             length = int(self.headers.get("content-length") or 0)
             request = json.loads(self.rfile.read(length) or b"{}")
@@ -175,6 +195,12 @@ class handler(BaseHTTPRequestHandler):
             if not isinstance(source_url, str) or kind not in ("pdf", "docx"):
                 self._send(400, {"error": "invalid_request", "detail": "sourceUrl and kind (pdf|docx) are required"})
                 return
+            if watchdog_armed:
+                signal.signal(signal.SIGALRM, _watchdog)
+                signal.alarm(WATCHDOG_SECONDS)
             self._send(200, extract_payload(source_url, kind))
         except Exception as exc:  # noqa: BLE001
             self._send(500, {"error": "extraction_failed", "detail": str(exc)})
+        finally:
+            if watchdog_armed:
+                signal.alarm(0)
