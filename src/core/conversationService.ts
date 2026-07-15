@@ -106,8 +106,12 @@ function directlyAddressed(userText: string, agents: AgentRef[]): boolean {
   return substantiveWords.length > 0;
 }
 
+// A leading routing prefix addresses the tool, not the content: users
+// naturally type "Suminar: @loury-foreword ..." and mean a direct address.
+const routingPrefixPattern = /^@?(?:suminar|agent\s*·?\s*sum|agentsum)\s*[:,\-–—]\s*/i;
+
 function leadingDirectAddress(userText: string, agents: AgentRef[]): boolean {
-  let remaining = userText.trimStart();
+  let remaining = userText.trimStart().replace(routingPrefixPattern, "");
   const leadingHandles = new Set<string>();
   while (true) {
     const match = remaining.match(/^@([a-z0-9][a-z0-9._-]*)(?=$|[^A-Za-z0-9._-])/i);

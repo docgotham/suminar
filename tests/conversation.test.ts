@@ -821,6 +821,20 @@ describe("roomless host-conversation event stream", () => {
     expect(failed.failures[0]).toMatchObject({ handle: "scholar-2024" });
   });
 
+  it("treats a leading routing prefix as part of the address, not the content", async () => {
+    const sync = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "Suminar: @scholar-2024 what does the source argue about disagreement?")],
+    });
+    const result = await service.invokeAgents({
+      conversationToken: sync.conversationToken,
+      throughCursor: sync.cursor,
+      targetHandles: ["scholar-2024"],
+    });
+    expect(result.failures).toEqual([]);
+    expect(result.messages[0]?.authoredMessage).toBe(answer);
+  });
+
   it("resupplies recent canonical turns on synchronization for the host's display check", async () => {
     const sync = await service.syncConversation({
       afterCursor: 0,

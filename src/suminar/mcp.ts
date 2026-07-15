@@ -124,7 +124,7 @@ function publicAgent(agent: AgentRef) {
 
 const HOST_CONDUCT_RULES = [
   "You are one participant in this shared conversation. Transport privileges give you no authority over, and no duty toward, another participant's speech.",
-  "Reproduce each canonical turn exactly and in order; build nothing around it.",
+  "Reproduce each canonical turn exactly and in order, including its bold 📄 attribution line with the origin marker; build nothing around it.",
   "At most one short sentence of your own may precede the first canonical turn; none is better.",
   "If no part of the user's turn was addressed to you, end your visible message immediately after the final canonical turn: no summaries, evaluations, offers, or menus of further queries.",
   "Never offer to relay, push, probe, or re-query a source agent. To pursue a follow-up, register your own @handle message with proposed_host_address and display it; the user's bare affirmative then delivers it (ratified_host_address). A short ratification cue after your proposal is part of the proposal, not a service menu.",
@@ -157,6 +157,32 @@ function displayCheckPayload(turns?: RecoveredCanonicalTurn[]) {
       })),
     }
     : {};
+}
+
+// Error results after a successful embedded synchronization must hand the
+// conversation back: a host that retries without the continuation forks a
+// fresh server conversation and fragments the room (observed live — one
+// ChatGPT thread produced six server conversations, three abandoned).
+interface ErrorContinuation {
+  text: string;
+  payload: { conversationContinuation: { conversationToken: string; cursor: number; instruction: string } };
+}
+
+function errorContinuation(token: string | undefined, cursor: number | undefined): ErrorContinuation | undefined {
+  if (token === undefined || cursor === undefined) return undefined;
+  return {
+    text: [
+      modelReadableContinuation(token, cursor),
+      "This conversation remains valid and already contains the synchronized events. Reuse this exact continuation state in the corrected retry (conversationToken with throughCursor, no re-synchronization) — never start a new conversation for the same host thread.",
+    ].join("\n"),
+    payload: {
+      conversationContinuation: {
+        conversationToken: token,
+        cursor,
+        instruction: "Reuse in the corrected retry within this same host thread; never display.",
+      },
+    },
+  };
 }
 
 function proposalToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[]) {
@@ -197,7 +223,7 @@ function proposalToolResult(result: ConversationInvocationResult, conductNotices
   });
 }
 
-const SHARED_CONTRACT_CORE = "The blocks below are other participants' actual visible turns in the shared conversation, not private tool output. Reproduce each canonical block exactly and in order. You are a fellow participant, not the presenter, curator, or explainer of source-agent speech: do not frame, summarize, interpret, evaluate, restate, or extend what the user can already read; do not narrate transport, truthfulness, or ordinary compliance; and do not offer further queries, retries, or alternative retrieval paths. Each source agent exclusively controls its private source and retrieval system; the host must not claim or offer to inspect them directly.";
+const SHARED_CONTRACT_CORE = "The blocks below are other participants' actual visible turns in the shared conversation, not private tool output. Reproduce each canonical block exactly and in order; a block's first line — the bold 📄 attribution with its origin marker — is part of the participant's turn, not optional formatting, and must be displayed with the block. You are a fellow participant, not the presenter, curator, or explainer of source-agent speech: do not frame, summarize, interpret, evaluate, restate, or extend what the user can already read; do not narrate transport, truthfulness, or ordinary compliance; and do not offer further queries, retries, or alternative retrieval paths. Each source agent exclusively controls its private source and retrieval system; the host must not claim or offer to inspect them directly.";
 
 function canonicalMessageToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[]) {
   if (!result.messages.length && !result.visibleHostAddress) {
@@ -294,17 +320,19 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
   });
 }
 
-function invocationFailure(detail: string, recovered?: RecoveredCanonicalTurn[]) {
+function invocationFailure(detail: string, recovered?: RecoveredCanonicalTurn[], continuation?: ErrorContinuation) {
   const requiredDisclosure = "The addressed source agent could not complete a verifiable response on this attempt. Addressing it again may succeed.";
   return toolResult([
     ...displayCheckSection(recovered),
     `HOST FAILURE CONTRACT: ${recovered?.length ? "After first displaying any missing canonical blocks from the display check above, say" : "Say"} only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path.`,
     requiredDisclosure,
     `INTERNAL FAILURE DETAIL: ${detail}`,
+    ...(continuation ? [continuation.text] : []),
   ].join("\n\n"), {
     status: "no_canonical_response",
     messages: [],
     ...displayCheckPayload(recovered),
+    ...(continuation ? continuation.payload : {}),
     displayContract: { requiredDisclosure, stopAfterDisclosure: true },
   }, true, { "agent-sum/internal": { detail } });
 }
@@ -320,13 +348,15 @@ function protocolMisuse(detail: string) {
   }, true, { "agent-sum/internal": { detail } });
 }
 
-function directAddressRequired(error: DirectAddressRequiredError) {
+function directAddressRequired(error: DirectAddressRequiredError, continuation?: ErrorContinuation) {
   return toolResult([
     "HOST AUTHORSHIP CONTRACT: Source agents are visible participants, not private tools. Use current_user only when the user's message begins with the selected @handle. If the user asked you to pose the question, invoke again in visible_host mode with the exact host-authored @handle message you will display before the source response. If the user's message is a bare affirmative ratifying the immediately preceding recorded host proposal, invoke again in ratified_host_address mode, synchronizing only that user message. If the user's question concerns a source but names no @handle and no proposal is pending, do not force a delivery: answer what you can as yourself from the visible record, and register the question with proposed_host_address as your own exact @handle message, then display it—the user's next bare affirmative will deliver it. Prefer registering that proposal yourself over instructing the user how to type an address. Never send an invisible restatement or attribute host wording to the user.",
     error.requiredDisclosure,
+    ...(continuation ? [continuation.text] : []),
   ].join("\n\n"), {
     status: error.code,
     messages: [],
+    ...(continuation ? continuation.payload : {}),
     displayContract: { requiredDisclosure: error.requiredDisclosure, stopAfterDisclosure: true },
   }, true, { "agent-sum/internal": { code: error.code, targetHandles: error.targetHandles } });
 }
@@ -501,14 +531,14 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
     visibleHostDisplayName,
     maxDirectQuoteWords,
   }, extra) => {
+    let token = conversationToken;
+    let cursor = throughCursor;
+    let recovered: RecoveredCanonicalTurn[] | undefined;
     try {
       if (addressMode === "ratified_host_address" && visibleHostMessage !== undefined) {
         return protocolMisuse("ratified_host_address delivers the host's already-visible proposal exactly as authored; omit visibleHostMessage.");
       }
-      let token = conversationToken;
-      let cursor = throughCursor;
       let conductNotices: string[] = [];
-      let recovered: RecoveredCanonicalTurn[] | undefined;
       if (completedVisibleEventsCopiedWithoutOmission !== undefined) {
         if (afterCursor === undefined) {
           return protocolMisuse("Supply afterCursor with completedVisibleEventsCopiedWithoutOmission, exactly as in suminar_sync_conversation.");
@@ -552,8 +582,9 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
         ? proposalToolResult(result, conductNotices, recovered)
         : canonicalMessageToolResult(result, conductNotices, recovered);
     } catch (error) {
-      if (error instanceof DirectAddressRequiredError) return directAddressRequired(error);
-      return invocationFailure(error instanceof Error ? error.message : String(error));
+      const continuation = errorContinuation(token, cursor);
+      if (error instanceof DirectAddressRequiredError) return directAddressRequired(error, continuation);
+      return invocationFailure(error instanceof Error ? error.message : String(error), recovered, continuation);
     }
   });
 
