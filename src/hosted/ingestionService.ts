@@ -21,7 +21,14 @@ type ArtifactKind = "original" | "markdown" | "chunks" | "embeddings" | "extract
 // Must match the query-time model: retrieval derives the query-embedding model
 // from the stored records, and the open-kernel pipeline defaults to the same.
 const EMBEDDING_MODEL = "text-embedding-3-small";
-const EMBEDDING_BATCH = 96;
+// Smaller batches keep each request modest so one stall costs little; the
+// per-request timeout makes a stall fail fast instead of hanging to the
+// platform kill, and the total budget bounds a large multi-batch document.
+// A single un-timed 81-chunk request once ran a source to the 300s function
+// kill, orphaning it in "processing" (2026-07-15).
+const EMBEDDING_BATCH = 32;
+const EMBEDDING_REQUEST_TIMEOUT_MS = 45_000;
+const EMBEDDING_TOTAL_BUDGET_MS = 180_000;
 
 interface ExtractionResult {
   agentId: string;
@@ -93,16 +100,35 @@ export class HostedIngestionService {
   // lexical scoring).
   private async computeEmbeddings(chunks: ChunkRecord[]): Promise<string | undefined> {
     if (!process.env.OPENAI_API_KEY || !chunks.length) return undefined;
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const records: EmbeddingRecord[] = [];
-    for (let start = 0; start < chunks.length; start += EMBEDDING_BATCH) {
-      const batch = chunks.slice(start, start + EMBEDDING_BATCH);
-      const response = await client.embeddings.create({ model: EMBEDDING_MODEL, input: batch.map((chunk) => chunk.text) });
-      response.data.forEach((row, index) => {
-        records.push({ chunkId: batch[index]!.chunkId, model: EMBEDDING_MODEL, embedding: row.embedding });
+    // Embeddings are an optional accelerator: retrieval falls back to lexical
+    // scoring without them, so this must never throw and never hang. Each
+    // request is timeout-bounded (fail fast, no SDK retry to double it), and a
+    // stall or the total budget abandons embeddings for this document rather
+    // than orphaning it — the document still becomes ready with lexical
+    // retrieval, which is the design intent.
+    try {
+      const client = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        timeout: EMBEDDING_REQUEST_TIMEOUT_MS,
+        maxRetries: 0,
       });
+      const records: EmbeddingRecord[] = [];
+      const deadline = Date.now() + EMBEDDING_TOTAL_BUDGET_MS;
+      for (let start = 0; start < chunks.length; start += EMBEDDING_BATCH) {
+        if (Date.now() > deadline) {
+          throw new Error(`embedding budget exhausted after ${records.length}/${chunks.length} chunks`);
+        }
+        const batch = chunks.slice(start, start + EMBEDDING_BATCH);
+        const response = await client.embeddings.create({ model: EMBEDDING_MODEL, input: batch.map((chunk) => chunk.text) });
+        response.data.forEach((row, index) => {
+          records.push({ chunkId: batch[index]!.chunkId, model: EMBEDDING_MODEL, embedding: row.embedding });
+        });
+      }
+      return records.map((record) => JSON.stringify(record)).join("\n");
+    } catch (error) {
+      console.error(`[suminar] embeddings skipped for this source, lexical retrieval retained: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
     }
-    return records.map((record) => JSON.stringify(record)).join("\n");
   }
 
   // Per-owner handle uniqueness: the MLA convention's invariant. Handles live
