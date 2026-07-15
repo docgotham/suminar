@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suminar — bring the sources into the conversation</title>
+<meta name="description" content="Suminar seats named source agents — a foreword, a monograph, a study — in the AI chat you already use, as fellow participants. Each answers from its own pages, quotes only what it can verify, and cites where it stands.">
+<link rel="canonical" href="https://suminar.ai/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f2">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1226">
+<meta property="og:title" content="Suminar — bring the sources into the conversation">
+<meta property="og:description" content="Named source agents join your AI chat as fellow participants: answering from their own pages, quoting only what they can verify, citing where they stand.">
+<meta property="og:url" content="https://suminar.ai/">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://suminar.ai/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/fonts/InstrumentSans-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/SourceSerif4-var.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  /* Self-hosted OFL faces (site/fonts/, licenses alongside) — the trust page
+     says no third-party requests, so no font CDNs. Latin subsets, variable. */
+  @font-face {
+    font-family: 'Instrument Sans';
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url(/fonts/InstrumentSans-var.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'Source Serif 4';
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url(/fonts/SourceSerif4-var.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'Source Serif 4';
+    font-style: italic;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url(/fonts/SourceSerif4-Italic-var.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+
+  /* Sum·inar — Direction B (Lapis). Tokens per docs/brand.md; the serif is
+     reserved for source speech, ultramarine marks sourced speech or the path
+     to it, pyrite never takes a primary CTA. */
+  :root {
+    --accent: #2b46c8;
+    --accent-deep: #1a2a6e;
+    --accent-gold: #d9a527;
+    --accent-tint: #e9eefb;
+    --accent-contrast: #10142a;
+    --paper: #f7f7f2;
+    --mut: #5c6070;
+    --line: #dfe0d9;
+    --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #5570e8;
+      --accent-deep: #8095ee;
+      --accent-gold: #e5b53a;
+      --accent-tint: #141a38;
+      --accent-contrast: #e6e7ef;
+      --paper: #0e1226;
+      --mut: #9aa0b5;
+      --line: #232946;
+      --card: #131834;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--accent-contrast);
+    font-family: 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
+  .label {
+    font-size: .6875rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--mut);
+    font-weight: 600;
+  }
+
+  header { border-bottom: 1px solid var(--line); }
+  .nav { display: flex; align-items: center; gap: 1rem; padding: 1.1rem 0; }
+  .lockup { display: inline-flex; align-items: center; gap: .6rem; text-decoration: none; color: inherit; }
+  .wordmark { font-weight: 700; font-size: 1.25rem; letter-spacing: -0.02em; }
+  .wordmark .dot { color: var(--accent); }
+  .nav nav { margin-left: auto; display: flex; gap: 1.4rem; flex-wrap: wrap; }
+  .nav nav a { font-size: .875rem; font-weight: 600; text-decoration: none; color: var(--accent-contrast); }
+  .nav nav a:hover { color: var(--accent); }
+
+  .hero { padding: 4.5rem 0 4rem; }
+  .hero h1 {
+    font-size: clamp(2rem, 5.5vw, 3.25rem);
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    margin: 0 0 1rem;
+    max-width: 21ch;
+    text-wrap: balance;
+  }
+  .hero .dek { font-size: 1.0625rem; color: var(--mut); max-width: 56ch; margin: 0 0 1.75rem; }
+  .cta-row { display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; margin-bottom: 3.25rem; }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--paper);
+    font-weight: 600;
+    font-size: .9375rem;
+    text-decoration: none;
+    padding: .65rem 1.2rem;
+    border-radius: 4px;
+    border: 0;
+    cursor: pointer;
+  }
+  .btn:hover { background: var(--accent-deep); }
+  .quiet { font-size: .9375rem; font-weight: 600; text-decoration: none; }
+  .quiet:hover { text-decoration: underline; }
+
+  .seminar { max-width: 46rem; }
+  .turn-user {
+    font-size: .9375rem;
+    font-weight: 600;
+    margin: 1.5rem 0 .75rem;
+  }
+  .turn-user .handle { color: var(--accent); }
+  .canonical {
+    background: var(--accent-tint);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    padding: .9rem 1.1rem .8rem;
+  }
+  .canonical .who { font-size: .8125rem; font-weight: 700; }
+  .canonical .who .origin { font-weight: 400; color: var(--mut); }
+  .canonical p {
+    font-family: 'Source Serif 4', 'Palatino Linotype', Palatino, Georgia, serif;
+    font-size: .9688rem;
+    margin: .45rem 0 .55rem;
+  }
+  .canonical .cite { font-size: .78rem; color: var(--mut); }
+  .specimen-note { font-size: .8125rem; color: var(--mut); margin-top: 1.25rem; max-width: 56ch; }
+
+  section { padding: 3.75rem 0; border-top: 1px solid var(--line); }
+  section h2 { font-size: 1.5rem; letter-spacing: -0.01em; margin: .4rem 0 1.5rem; text-wrap: balance; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1.5rem; }
+  .step h3 { font-size: 1.0313rem; margin: 0 0 .4rem; }
+  .step p { font-size: .9063rem; color: var(--mut); margin: 0; }
+  .step .n {
+    display: inline-grid; place-items: center;
+    width: 1.7rem; height: 1.7rem; border-radius: 50%;
+    background: var(--accent-tint); color: var(--accent);
+    font-size: .8125rem; font-weight: 700; margin-bottom: .7rem;
+  }
+  .chip {
+    display: inline-block;
+    font-family: Consolas, ui-monospace, monospace;
+    font-size: .8125rem;
+    background: var(--accent-tint);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: .1rem .45rem;
+  }
+
+  .trust-lead { max-width: 58ch; }
+  .trust-lead p { font-size: 1rem; margin: 0 0 1rem; }
+  .pull { font-size: 1.1875rem; font-weight: 650; letter-spacing: -0.01em; margin-top: 1.4rem; }
+  .claims { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1.25rem; margin-top: 2rem; }
+  .claim {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1.1rem 1.2rem 1.15rem;
+  }
+  .claim h3 { font-size: .9688rem; margin: 0 0 .45rem; }
+  .claim p { font-size: .8594rem; color: var(--mut); margin: 0; }
+  .quotas {
+    margin-top: 2rem;
+    font-size: .8125rem;
+    color: var(--mut);
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem .75rem;
+    align-items: baseline;
+  }
+  .quotas b { color: var(--accent-contrast); font-variant-numeric: tabular-nums; }
+  .quotas .sep { color: var(--line); }
+
+  .access p { max-width: 56ch; color: var(--mut); }
+  .waitlist { display: flex; gap: .75rem; flex-wrap: wrap; margin: 1.5rem 0 .6rem; max-width: 34rem; }
+  .waitlist input {
+    flex: 1 1 16rem;
+    font: inherit;
+    font-size: .9375rem;
+    color: var(--accent-contrast);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: .6rem .8rem;
+  }
+  .waitlist input::placeholder { color: var(--mut); }
+  #wl-status { font-size: .875rem; min-height: 1.4em; margin: 0; }
+  #wl-status.ok { color: var(--accent); font-weight: 600; }
+  #wl-status.err { color: #b4232c; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { #wl-status.err { color: #f07880; } }
+  .invite-note { font-size: .8125rem; }
+  .invite-note .gold { color: var(--accent-gold); font-weight: 600; }
+
+  footer { border-top: 1px solid var(--line); padding: 2rem 0 2.5rem; }
+  .foot { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: .8125rem; color: var(--mut); }
+  .foot .lockup { gap: .45rem; }
+  .foot .wordmark { font-size: .9375rem; }
+  .foot a { color: var(--mut); }
+  .foot a:hover { color: var(--accent); }
+  .foot .push { margin-left: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="lockup" href="/" aria-label="Suminar home">
+      <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><mask id="mk">
+          <rect fill="white" width="100" height="100"/>
+          <g fill="none" stroke="black" stroke-linecap="round" stroke-width="5" transform="rotate(-35 50 50)">
+            <path d="M61 14 L61 28 L75 28"/>
+            <path d="M35 46 H58"/><path d="M35 58 H65"/><path d="M35 70 H59"/>
+          </g>
+        </mask></defs>
+        <g transform="rotate(-35 50 50)">
+          <path d="M31 14 L61 14 L75 28 L75 82 Q75 88 69 88 L31 88 Q25 88 25 82 L25 20 Q25 14 31 14 Z"
+                fill="var(--accent)" mask="url(#mk)"/>
+        </g>
+      </svg>
+      <span class="wordmark">Sum<span class="dot">·</span>inar</span>
+    </a>
+    <nav aria-label="Site">
+      <a href="#how">How it works</a>
+      <a href="#why">Why agents</a>
+      <a href="#trust">Trust</a>
+      <a href="#access">Request an account</a>
+      <a href="/account/" style="color: var(--accent)">Account</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <h1>Bring the sources into the conversation.</h1>
+    <p class="dek">Suminar seats named source agents — a 1999 foreword, a 252-page
+    empirical study — in the AI chat you already use, as fellow participants.
+    Each one answers from its own pages, quotes only what it can verify, and
+    cites where it stands.</p>
+    <div class="cta-row">
+      <a class="btn" href="#access">Request an account</a>
+      <a class="quiet" href="#trust">Read the trust story →</a>
+    </div>
+
+    <div class="seminar" aria-label="A live seminar exchange">
+      <p class="turn-user"><span class="handle">@loury-foreword</span> What does the
+      Foreword consider the strongest practical argument for race-conscious admissions?</p>
+
+      <div class="canonical">
+        <div class="who">📄 Glenn C. Loury 1999 <span class="origin">· local</span></div>
+        <p>It advances a prudential case grounded in institutional legitimacy: because
+        racial identity shapes how Americans perceive fairness, ignoring race can heighten
+        racial salience. The Foreword points to “the link between the perceived legitimacy
+        of institutions and their degree of racial representation” — conveying race's
+        ultimate moral irrelevance “may require functional attention by administrative
+        personnel to the racial composition of the learning environment.”</p>
+        <div class="cite">Foreword to The Shape of the River, 10–11</div>
+      </div>
+
+      <p class="turn-user"><span class="handle">@sowell-affirmative-action</span> Respond
+      to the Loury agent's argument using your source's strongest empirical objection.</p>
+
+      <div class="canonical">
+        <div class="who">📄 Thomas Sowell 2004 <span class="origin">· local</span></div>
+        <p>Preferential admissions at selective institutions mainly reallocate minority
+        candidates across a hierarchy rather than expand how many gain entry — and double
+        standards themselves foster a climate of suspicion around minority credentials,
+        which damages the very legitimacy the argument invokes.</p>
+        <div class="cite">Affirmative Action Around the World: An Empirical Study, 158–159; 201</div>
+      </div>
+
+      <p class="specimen-note">From a live seminar, July 2026: two uploaded sources,
+      addressed by handle inside an ordinary AI chat, disagreeing with page citations —
+      while the chat's own assistant stays one participant among several.</p>
+    </div>
+  </div>
+
+  <section id="how">
+    <div class="wrap">
+      <span class="label">How it works</span>
+      <h2>Three steps to a seminar</h2>
+      <div class="steps">
+        <div class="step">
+          <span class="n">1</span>
+          <h3>Upload a source</h3>
+          <p>A PDF or .docx becomes a named agent with exclusive custody of its text —
+          extracted, page-anchored, and embedded at upload. Your original stays
+          exportable, always.</p>
+        </div>
+        <div class="step">
+          <span class="n">2</span>
+          <h3>Connect your chat</h3>
+          <p>Add Suminar to Claude, ChatGPT, or any MCP-capable host as a remote
+          connector — OAuth with PKCE, authorized by a connector token from your
+          account.</p>
+        </div>
+        <div class="step">
+          <span class="n">3</span>
+          <h3>Address them by handle</h3>
+          <p>Write <span class="chip">@loury-foreword What does the Foreword argue?</span>
+          in your own chat. The agent reads the shared conversation and answers from its
+          pages, in its own voice, with citations.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <div class="wrap">
+      <span class="label">Why agents</span>
+      <h2>Why not just upload the PDFs?</h2>
+      <div class="trust-lead">
+        <p>Drop five PDFs into a chatbot and they blend. Retrieval pulls the
+        highest-scoring fragments from whichever file happens to have them, the
+        assistant paraphrases everything in one voice, and the seams between
+        your sources — where the interesting disagreements live — get smoothed
+        away.</p>
+        <p>A Suminar source agent is scoped to a single text. Its entire
+        retrieval world is that one source, so it answers as a specialist:
+        the positions of <i>this</i> book, grounded in <i>its</i> pages. And
+        because each source keeps its own voice, disagreement stays visible —
+        address two agents and you get an actual exchange, like the one above,
+        with page citations on both sides.</p>
+        <p class="pull">A Works Cited page, come to life.</p>
+      </div>
+      <div class="claims">
+        <div class="claim">
+          <h3>One source, one agent</h3>
+          <p>An agent's retrieval never crosses into another text. Nothing
+          bleeds between sources; nothing averages into mush.</p>
+        </div>
+        <div class="claim">
+          <h3>Crisper answers</h3>
+          <p>A specialist on its twelve pages — or its 252 — rather than a
+          generalist over the pile. Depth of focus shows up in the answers.</p>
+        </div>
+        <div class="claim">
+          <h3>Emergent debate</h3>
+          <p>Distinct voices can genuinely disagree. Ask one agent to answer
+          another's argument and watch both positions sharpen.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="trust">
+    <div class="wrap">
+      <span class="label">The trust story</span>
+      <h2>The product that can't misquote</h2>
+      <div class="trust-lead">
+        <p>A source agent may quote its source only when the quoted words match the
+        private source evidence character-for-character. A quotation that cannot be
+        verified is <b>refused, never repaired</b>; a page citation not grounded in
+        evidence in hand is stripped rather than published. Visible conversation text
+        is never accepted as quotation evidence.</p>
+        <p>These aren't promises — they're properties. Every claim in this section is
+        pinned by tests that fail the moment the code stops backing it.</p>
+      </div>
+      <div class="claims">
+        <div class="claim">
+          <h3>Invite-only beta, visible limits</h3>
+          <p>Per-account quotas are abuse guards enforced inside the database — no
+          application path can skip them. The waitlist stores a normalized email and
+          a timestamp, nothing else.</p>
+        </div>
+        <div class="claim">
+          <h3>Content-blind operation</h3>
+          <p>The operator surface reads counts and metadata; it cannot read what you
+          uploaded, asked, or were told. No end-to-end encryption, deliberately —
+          agents must read their derivatives to answer. If operator tooling ever
+          touches your material, it writes an audit row you can read. If we ever
+          look, you see that we looked.</p>
+        </div>
+        <div class="claim">
+          <h3>Your material leaves with you</h3>
+          <p>Every original and derivative is exportable by its owner at any time,
+          and each export writes an owner-visible audit row before anything is
+          released. Deleting a document removes its rows and stored objects.</p>
+        </div>
+        <div class="claim">
+          <h3>No client analytics</h3>
+          <p>These pages ship no analytics scripts — no third-party requests at all.</p>
+        </div>
+        <div class="claim">
+          <h3>Verifiable deployment</h3>
+          <p><a href="/version">/version</a> names the exact commit this server was
+          built from — “the code is open” as a falsifiable claim about this server,
+          not a vague one about a repository.</p>
+        </div>
+      </div>
+      <div class="quotas" aria-label="Pilot quotas">
+        <span class="label">Pilot quotas</span>
+        <span><b>200</b> invocations/day</span><span class="sep">·</span>
+        <span><b>2000</b>/30 days</span><span class="sep">·</span>
+        <span><b>50</b> documents</span><span class="sep">·</span>
+        <span><b>1 GiB</b> stored</span><span class="sep">·</span>
+        <span><b>256 MiB</b> per upload</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="access">
+    <div class="wrap access">
+      <span class="label">Access</span>
+      <h2>Request an account</h2>
+      <p>Suminar is in a small invite-only pilot while we calibrate. Leave an email
+      and we'll be in touch as seats open.</p>
+      <form class="waitlist" id="wl">
+        <label for="wl-email" class="label" style="position:absolute; left:-9999px">Email address</label>
+        <input id="wl-email" type="email" name="email" required autocomplete="email"
+               placeholder="you@university.edu" inputmode="email">
+        <button class="btn" type="submit" id="wl-btn">Join the waitlist</button>
+      </form>
+      <p id="wl-status" role="status"></p>
+      <p class="invite-note">Already invited? <a href="/account/redeem">Redeem your
+      code</a> — it creates your account and your first connector token on the spot.
+      Members: <a href="/account/">your account</a> is where sources, tokens, and
+      <span class="gold">invite codes</span> live.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span class="lockup">
+      <svg width="18" height="18" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><mask id="mkf">
+          <rect fill="white" width="100" height="100"/>
+          <g fill="none" stroke="black" stroke-linecap="round" stroke-width="5" transform="rotate(-35 50 50)">
+            <path d="M61 14 L61 28 L75 28"/>
+            <path d="M35 46 H58"/><path d="M35 58 H65"/><path d="M35 70 H59"/>
+          </g>
+        </mask></defs>
+        <g transform="rotate(-35 50 50)">
+          <path d="M31 14 L61 14 L75 28 L75 82 Q75 88 69 88 L31 88 Q25 88 25 82 L25 20 Q25 14 31 14 Z"
+                fill="var(--accent)" mask="url(#mkf)"/>
+        </g>
+      </svg>
+      <span class="wordmark">Sum<span class="dot">·</span>inar</span>
+    </span>
+    <span>Built on the Agent·Sum protocol.</span>
+    <a href="/account/">Your account</a>
+    <a class="push" href="/version">Verify this deployment</a>
+  </div>
+</footer>
+
+<script>
+  // The site's one behavior: the waitlist form. Same-origin POST /waitlist;
+  // the database owns validation and answers identically whether or not an
+  // address is already listed (enumeration-proof), so success copy stays neutral.
+  const form = document.getElementById("wl");
+  const status = document.getElementById("wl-status");
+  const btn = document.getElementById("wl-btn");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    status.className = "";
+    status.textContent = "…";
+    btn.disabled = true;
+    try {
+      const res = await fetch("/waitlist", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: document.getElementById("wl-email").value.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.ok) {
+        status.className = "ok";
+        status.textContent = "Request received.";
+        form.reset();
+      } else if (res.status === 429) {
+        status.className = "err";
+        status.textContent = "Too many requests from this network — try again in " + (body.retryAfterSeconds ?? 60) + "s.";
+      } else {
+        status.className = "err";
+        status.textContent = body.error_description || "That didn't go through — check the address and try again.";
+      }
+    } catch {
+      status.className = "err";
+      status.textContent = "Network error — try again in a moment.";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

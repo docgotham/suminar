@@ -1,0 +1,42 @@
+{
+  "name": "suminar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "suminar": "./dist/src/cli.js",
+    "suminar-mcp": "./dist/src/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev:mcp": "tsx src/server.ts",
+    "dev:dashboard": "tsx src/suminar/dashboard.ts",
+    "dev:remote-agent": "tsx src/remote-test-agent.ts",
+    "smoke:mcp": "node scripts/mcp_smoke.mjs",
+    "eval:host-conduct": "node scripts/host_conduct_eval.mjs",
+    "cli": "tsx src/cli.ts",
+    "start:mcp": "node dist/src/server.js",
+    "start:dashboard": "node dist/src/suminar/dashboard.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@supabase/supabase-js": "^2.110.3",
+    "express": "5.1.0",
+    "multer": "2.2.0",
+    "openai": "6.9.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/multer": "2.0.0",
+    "@types/node": "24.10.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

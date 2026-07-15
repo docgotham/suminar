@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Suminar Source Agents</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <p class="eyebrow">LOCAL MANAGEMENT</p>
+    <h1>Sum<span>·</span>inar</h1>
+    <p>Manage situated source agents. Conversation happens in your Claude, ChatGPT, or other MCP host thread.</p>
+  </header>
+  <main>
+    <section>
+      <div class="section-heading"><h2>Source agents</h2><span id="agent-count" class="count">0</span></div>
+      <form id="ingest-form" enctype="multipart/form-data">
+        <label class="drop">PDF<input name="pdf" type="file" accept="application/pdf" required></label>
+        <div class="grid"><label>Title<input name="title"></label><label>Authors<input name="authors" placeholder="Separate with semicolons"></label></div>
+        <div class="grid"><label>Year<input name="year" type="number"></label><label>@handle<input name="handle" placeholder="author-2024"></label></div>
+        <label><input name="embed" type="checkbox" value="true"> Generate OpenAI embeddings now</label>
+        <button>Ingest private source</button>
+      </form>
+      <div id="agents" class="cards"></div>
+    </section>
+
+    <section>
+      <div class="section-heading"><h2>Remote source agents</h2><button id="check-remotes" class="small-button">Check origins</button></div>
+      <p>Preview an agent card before adding a public HTTPS source agent to the library.</p>
+      <form id="remote-form">
+        <label>Agent-card URL<input name="manifestUrl" type="url" placeholder="https://publisher.example/.well-known/agent-sum.json" required></label>
+        <button>Preview origin</button>
+      </form>
+      <div id="remote-preview"></div>
+    </section>
+  </main>
+  <div id="status" role="status"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,130 @@
+import { describe, expect, it } from "vitest";
+import { deriveDisplayName, handleCandidates, invertFirstAuthor, mlaAuthorsLabel, mlaCitationParts, significantTitleWords, surnameOf } from "../src/suminar/naming.js";
+
+// The MLA convention: scholars disambiguate one author's works with shortened
+// titles, not dates — so derived handles are surname + short title, display
+// names read like Works Cited short forms, and years appear only as a last
+// resort. Same author, same year is a non-event.
+
+describe("surname extraction", () => {
+  it("takes the last name, keeps particles, skips suffixes", () => {
+    expect(surnameOf("Thomas Sowell")).toBe("Sowell");
+    expect(surnameOf("Glenn C. Loury")).toBe("Loury");
+    expect(surnameOf("W.E.B. Du Bois")).toBe("Du Bois");
+    expect(surnameOf("Martin Luther King Jr.")).toBe("King");
+    expect(surnameOf("Jan van der Berg")).toBe("van der Berg");
+    expect(surnameOf("Sowell")).toBe("Sowell");
+    expect(surnameOf("  ")).toBe("");
+  });
+
+  it("reads Works Cited inversion: a comma puts the surname first", () => {
+    expect(surnameOf("Sowell, Thomas")).toBe("Sowell");
+    expect(surnameOf("Du Bois, W.E.B.")).toBe("Du Bois");
+    expect(surnameOf("van der Berg, Jan")).toBe("van der Berg");
+    expect(surnameOf("King, Martin Luther, Jr.")).toBe("King");
+    // A comma followed only by a suffix is NOT an inversion.
+    expect(surnameOf("Martin Luther King, Jr.")).toBe("King");
+  });
+
+  it("derives the same handle from either author order", () => {
+    const natural = handleCandidates({ authors: ["Thomas Sowell"], title: "Basic Economics", year: 2004 })[0];
+    const inverted = handleCandidates({ authors: ["Sowell, Thomas"], title: "Basic Economics", year: 2004 })[0];
+    expect(natural).toBe("sowell-basic-economics");
+    expect(inverted).toBe(natural);
+  });
+});
+
+describe("shortened titles", () => {
+  it("drops subtitles and stopwords, keeps substance", () => {
+    expect(significantTitleWords("Affirmative Action Around the World: An Empirical Study"))
+      .toEqual(["Affirmative", "Action", "Around", "World"]);
+    expect(significantTitleWords("The Shape of the River")).toEqual(["Shape", "River"]);
+    expect(significantTitleWords("Foreword to The Shape of the River")).toEqual(["Foreword", "Shape", "River"]);
+  });
+
+  it("keeps stopword-only titles rather than emptying them", () => {
+    expect(significantTitleWords("Of the And")).toEqual(["Of", "the", "And"]);
+  });
+
+  it("treats a spaced dash as a subtitle boundary (browser save-as tails)", () => {
+    expect(significantTitleWords("A Great Man, Warts and All – Commentary Magazine"))
+      .toEqual(["Great", "Man", "Warts", "All"]);
+    expect(significantTitleWords("Race and Economics - A Study")).toEqual(["Race", "Economics"]);
+    // Unspaced hyphens are word-internal and survive.
+    expect(significantTitleWords("The Semi-Detached House")).toEqual(["Semi-Detached", "House"]);
+    expect(deriveDisplayName({ authors: ["Wilfred Reilly"], title: "A Great Man, Warts and All – Commentary Magazine", year: 2023 }))
+      .toBe("Reilly, A Great Man, Warts and All (2023)");
+  });
+});
+
+describe("handle candidates", () => {
+  it("leads with surname + two significant title words (the five-Sowell shelf)", () => {
+    expect(handleCandidates({ authors: ["Thomas Sowell"], title: "Affirmative Action Around the World: An Empirical Study", year: 2004 })[0])
+      .toBe("sowell-affirmative-action");
+    expect(handleCandidates({ authors: ["Thomas Sowell"], title: "Basic Economics", year: 2004 })[0])
+      .toBe("sowell-basic-economics");
+    expect(handleCandidates({ authors: ["Thomas Sowell"], title: "The Vision of the Anointed", year: 1995 })[0])
+      .toBe("sowell-vision-anointed");
+    expect(handleCandidates({ authors: ["W.E.B. Du Bois"], title: "The Souls of Black Folk", year: 1903 })[0])
+      .toBe("du-bois-souls-black");
+  });
+
+  it("extends by title words before reaching for the year", () => {
+    const candidates = handleCandidates({ authors: ["Thomas Sowell"], title: "Affirmative Action Around the World: An Empirical Study", year: 2004 });
+    expect(candidates[1]).toBe("sowell-affirmative-action-around");
+    expect(candidates[2]).toBe("sowell-affirmative-action-around-world");
+    expect(candidates[3]).toBe("sowell-affirmative-action-around-world-2004");
+  });
+
+  it("degrades gracefully without authors, and never to nothing", () => {
+    expect(handleCandidates({ authors: [], title: "shape-river-foreword" })[0]).toBe("shape-river-foreword");
+    const empty = handleCandidates({ authors: [], title: "" });
+    expect(empty[0]).toBe("source");
+    expect(empty[1]).toBe("source-2");
+  });
+});
+
+describe("MLA citation parts", () => {
+  it("inverts the first author for the entry head", () => {
+    expect(invertFirstAuthor("Thomas Sowell")).toBe("Sowell, Thomas");
+    expect(invertFirstAuthor("W.E.B. Du Bois")).toBe("Du Bois, W.E.B.");
+    expect(invertFirstAuthor("Sowell, Thomas")).toBe("Sowell, Thomas");
+    expect(invertFirstAuthor("Sowell")).toBe("Sowell");
+  });
+
+  it("labels one, two, and many authors MLA-style", () => {
+    expect(mlaAuthorsLabel(["Thomas Sowell"])).toBe("Sowell, Thomas.");
+    expect(mlaAuthorsLabel(["W.E.B. Du Bois"])).toBe("Du Bois, W.E.B.");
+    expect(mlaAuthorsLabel(["William G. Bowen", "Derek Bok"])).toBe("Bowen, William G., and Derek Bok.");
+    expect(mlaAuthorsLabel(["A One", "B Two", "C Three"])).toBe("One, A, et al.");
+    expect(mlaAuthorsLabel([])).toBeUndefined();
+  });
+
+  it("keeps the full title in the formal record and passes the year through", () => {
+    const parts = mlaCitationParts({ authors: ["Thomas Sowell"], title: "Affirmative Action Around the World: An Empirical Study", year: 2004 });
+    expect(parts).toEqual({
+      authorsLabel: "Sowell, Thomas.",
+      title: "Affirmative Action Around the World: An Empirical Study",
+      year: 2004,
+    });
+    expect(mlaCitationParts({ authors: [], title: "Basic Economics" })).toEqual({ title: "Basic Economics" });
+  });
+});
+
+describe("display names", () => {
+  it("reads like a Works Cited short form", () => {
+    expect(deriveDisplayName({ authors: ["Thomas Sowell"], title: "Affirmative Action Around the World: An Empirical Study", year: 2004 }))
+      .toBe("Sowell, Affirmative Action Around the World (2004)");
+    expect(deriveDisplayName({ authors: ["W.E.B. Du Bois"], title: "The Souls of Black Folk", year: 1903 }))
+      .toBe("Du Bois, The Souls of Black Folk (1903)");
+    expect(deriveDisplayName({ authors: [], title: "Basic Economics", year: 2004 })).toBe("Basic Economics (2004)");
+    expect(deriveDisplayName({ authors: ["Thomas Sowell"], title: "Basic Economics" })).toBe("Sowell, Basic Economics");
+    expect(deriveDisplayName({ authors: [], title: "" })).toBe("Untitled source");
+  });
+
+  it("caps very long main titles at a word boundary", () => {
+    const long = deriveDisplayName({ authors: ["Someone Longwinded"], title: "A ".repeat(10) + "Genuinely Interminable Meandering Extended Discourse Upon Matters Various" });
+    expect(long.length).toBeLessThan(90);
+    expect(long.endsWith(")")).toBe(false);
+  });
+});

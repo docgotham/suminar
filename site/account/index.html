@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your account — Suminar</title>
+<meta name="description" content="Manage your Suminar source agents, connector tokens, and invites.">
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f2">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1226">
+<style>
+  @font-face {
+    font-family: 'Instrument Sans';
+    font-style: normal; font-weight: 400 700; font-display: swap;
+    src: url(/fonts/InstrumentSans-var.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  :root {
+    --accent: #2b46c8; --accent-deep: #1a2a6e; --accent-gold: #d9a527;
+    --accent-tint: #e9eefb; --accent-contrast: #10142a; --paper: #f7f7f2;
+    --mut: #5c6070; --line: #dfe0d9; --card: #ffffff; --err: #b4232c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #5570e8; --accent-deep: #8095ee; --accent-gold: #e5b53a;
+      --accent-tint: #141a38; --accent-contrast: #e6e7ef; --paper: #0e1226;
+      --mut: #9aa0b5; --line: #232946; --card: #131834; --err: #f07880;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--accent-contrast);
+    font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif; line-height: 1.55;
+  }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wrap { max-width: 56rem; margin: 0 auto; padding: 0 1.25rem; }
+  header { border-bottom: 1px solid var(--line); }
+  .nav { display: flex; align-items: center; padding: 1.1rem 0; gap: 1rem; }
+  .lockup { display: inline-flex; align-items: center; gap: .6rem; text-decoration: none; color: inherit; }
+  .wordmark { font-weight: 700; font-size: 1.25rem; letter-spacing: -0.02em; }
+  .wordmark .dot { color: var(--accent); }
+  #signout { margin-left: auto; }
+  main { padding: 2.5rem 0 4rem; }
+  h1 { font-size: 1.6rem; letter-spacing: -0.01em; margin: 0 0 .5rem; }
+  h2 { font-size: 1.1rem; margin: 0 0 .9rem; }
+  .sub { color: var(--mut); font-size: .9375rem; margin: 0 0 1.5rem; max-width: 46rem; }
+  .label { font-size: .6875rem; letter-spacing: .09em; text-transform: uppercase; color: var(--mut); font-weight: 600; }
+  label { display: block; font-size: .8125rem; font-weight: 600; margin: .9rem 0 .3rem; }
+  input, select {
+    width: 100%; font: inherit; font-size: .9063rem; color: var(--accent-contrast);
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: .55rem .75rem;
+  }
+  input::placeholder { color: var(--mut); }
+  button {
+    font: inherit; font-size: .875rem; font-weight: 600;
+    background: var(--accent); color: var(--paper); border: 0; border-radius: 4px;
+    padding: .5rem 1rem; cursor: pointer;
+  }
+  button:hover { background: var(--accent-deep); }
+  button:disabled { opacity: .6; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button.ghost:hover { border-color: var(--accent); background: transparent; }
+  button.danger { background: transparent; color: var(--err); border: 1px solid var(--line); }
+  button.danger:hover { border-color: var(--err); background: transparent; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+    padding: 1.25rem 1.4rem 1.35rem; margin-bottom: 1.5rem;
+  }
+  .row { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }
+  .row > div { flex: 1 1 10rem; }
+  .row button { margin-bottom: 1px; }
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  th { text-align: left; font-size: .6875rem; letter-spacing: .08em; text-transform: uppercase; color: var(--mut); font-weight: 600; padding: .4rem .5rem .4rem 0; border-bottom: 1px solid var(--line); }
+  td { padding: .55rem .5rem .55rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .tablewrap { overflow-x: auto; }
+  .pill { display: inline-block; font-size: .71875rem; font-weight: 600; border-radius: 999px; padding: .05rem .55rem; background: var(--accent-tint); color: var(--accent); }
+  .pill.warn { background: transparent; border: 1px solid var(--accent-gold); color: var(--accent-gold); }
+  .pill.bad { background: transparent; border: 1px solid var(--err); color: var(--err); }
+  .status { font-size: .875rem; min-height: 1.3em; margin: .7rem 0 0; }
+  .status.err { color: var(--err); font-weight: 600; }
+  .reveal {
+    background: var(--accent-tint); border: 1px solid var(--accent);
+    border-radius: 4px; padding: .9rem 1rem; margin-top: 1rem;
+  }
+  .reveal .tokenbox { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; font-family: Consolas, ui-monospace, monospace; font-size: .8125rem; }
+  .reveal code { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: .4rem .55rem; word-break: break-all; flex: 1 1 14rem; }
+  .reveal .warn { font-size: .78rem; color: var(--mut); margin: .5rem 0 0; }
+  .reveal .warn b { color: var(--accent-gold); }
+  .meter { height: .45rem; border-radius: 999px; background: var(--accent-tint); overflow: hidden; margin: .3rem 0 .1rem; }
+  .meter > div { height: 100%; background: var(--accent); border-radius: 999px; }
+  .usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 1.25rem; }
+  .usage-grid .num { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .usage-grid .cap { font-size: .78rem; color: var(--mut); }
+  details.recover { margin-top: 1.4rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  details.recover summary { cursor: pointer; font-size: .875rem; font-weight: 600; color: var(--mut); }
+  .exports { font-size: .8125rem; margin: .5rem 0 0; }
+  .exports a { display: inline-block; margin-right: .9rem; }
+  .empty { color: var(--mut); font-size: .875rem; }
+  .citeline { font-size: .875rem; line-height: 1.45; max-width: 44ch; }
+  .anno { font-size: .78125rem; color: var(--mut); margin-top: .3rem; max-width: 44ch; }
+  .prov { font-size: .71875rem; color: var(--mut); opacity: .6; margin-top: .35rem; font-family: Consolas, ui-monospace, monospace; word-break: break-all; }
+  details.extras { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: .8rem; }
+  details.extras summary { cursor: pointer; font-size: .8125rem; font-weight: 600; color: var(--mut); }
+
+  /* account utilities: below the shelf, quiet, collapsed by default */
+  details.util > summary {
+    cursor: pointer; font-size: 1.1rem; font-weight: 700; letter-spacing: -.01em;
+    color: var(--accent-contrast);
+  }
+  details.util > summary:hover { color: var(--accent); }
+  details.util[open] > summary { margin-bottom: 1rem; }
+
+  /* compact source rows with disclosure */
+  tr.docrow { cursor: pointer; }
+  tr.docrow:hover td { background: color-mix(in srgb, var(--accent-tint) 40%, transparent); }
+  .chev { display: inline-block; width: 1rem; color: var(--mut); font-size: .75rem; }
+  tr.detailrow > td { background: var(--accent-tint); border-radius: 4px; }
+  .detailbox { padding: .85rem 1rem .95rem; }
+  .detailbox .anno { margin-top: 0; max-width: 60ch; }
+  .tiertag { font-size: .6875rem; color: var(--mut); opacity: .8; margin-left: .4rem; }
+  .detailmeta { font-size: .71875rem; color: var(--mut); opacity: .75; margin-top: .55rem; font-family: Consolas, ui-monospace, monospace; word-break: break-all; }
+  .detailactions { margin-top: .8rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+  .draftwrap { margin-top: .9rem; }
+  .draftta {
+    width: 100%; min-height: 4.5rem; margin-top: .4rem; font: inherit; font-size: .875rem;
+    color: var(--accent-contrast); background: var(--card);
+    border: 1px solid var(--accent); border-radius: 4px; padding: .55rem .75rem; resize: vertical;
+  }
+  details.uploader { margin-top: 1.25rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  details.uploader > summary { cursor: pointer; font-size: .875rem; font-weight: 600; color: var(--accent); }
+
+  /* the utility rail: plumbing beside the shelf, never buried under it */
+  .dashgrid { display: grid; gap: 1.5rem; align-items: start; }
+  @media (min-width: 64rem) {
+    .dashgrid { grid-template-columns: minmax(0, 1fr) 19rem; }
+    .rail { position: sticky; top: 1.25rem; }
+  }
+  .rail { display: grid; gap: 1rem; }
+  .rail .card { margin-bottom: 0; padding: 1rem 1.1rem 1.1rem; }
+  .rail details.util > summary { font-size: .9375rem; display: flex; align-items: baseline; gap: .5rem; }
+  .railstat { margin-left: auto; font-size: .71875rem; font-weight: 600; color: var(--mut); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="lockup" href="/" aria-label="Suminar home">
+      <svg width="24" height="24" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><mask id="mk"><rect fill="white" width="100" height="100"/>
+          <g fill="none" stroke="black" stroke-linecap="round" stroke-width="5" transform="rotate(-35 50 50)">
+            <path d="M61 14 L61 28 L75 28"/><path d="M35 46 H58"/><path d="M35 58 H65"/><path d="M35 70 H59"/>
+          </g></mask></defs>
+        <g transform="rotate(-35 50 50)">
+          <path d="M31 14 L61 14 L75 28 L75 82 Q75 88 69 88 L31 88 Q25 88 25 82 L25 20 Q25 14 31 14 Z" fill="var(--accent)" mask="url(#mk)"/>
+        </g>
+      </svg>
+      <span class="wordmark">Sum<span class="dot">·</span>inar</span>
+    </a>
+    <button id="signout" class="ghost" hidden>Sign out</button>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <!-- ============ gate ============ -->
+    <div id="gate">
+      <h1>Your account</h1>
+      <p class="sub">Open your account with a connector token — the same
+      credential your chat uses. It stays in this tab and is sent only to
+      suminar.ai.</p>
+      <div class="card" style="max-width: 34rem">
+        <label for="gate-token">Connector token</label>
+        <input id="gate-token" type="password" autocomplete="off" placeholder="suminar_…">
+        <div style="margin-top: 1.1rem"><button id="gate-open">Open account</button></div>
+        <p class="status" id="gate-status" role="status"></p>
+        <details class="recover">
+          <summary>Lost your token? Recover with email and password</summary>
+          <label for="rec-email">Email</label>
+          <input id="rec-email" type="email" autocomplete="email">
+          <label for="rec-password">Password</label>
+          <input id="rec-password" type="password" autocomplete="current-password">
+          <div style="margin-top: 1.1rem"><button id="rec-go" class="ghost">Mint a new token</button></div>
+          <p class="status" id="rec-status" role="status"></p>
+          <div id="rec-reveal" hidden class="reveal">
+            <div class="tokenbox"><code id="rec-token"></code><button type="button" id="rec-copy">Copy</button></div>
+            <p class="warn"><b>Shown once.</b> This token now opens your account below.</p>
+          </div>
+        </details>
+        <p class="status" style="margin-top:1rem">No account yet? <a href="/account/redeem">Redeem an invite</a>.</p>
+      </div>
+    </div>
+
+    <!-- ============ dashboard ============ -->
+    <div id="dash" hidden>
+      <h1>Your account</h1>
+      <p class="sub">Source agents, connector tokens, invites, and where you
+      stand against the pilot quotas.</p>
+
+      <div class="dashgrid">
+      <div class="dashmain">
+      <div class="card" id="docs-card">
+        <h2>Source agents</h2>
+        <div class="tablewrap"><table id="docs-table" hidden>
+          <thead><tr><th style="width:1.2rem"></th><th>Source</th><th>Agent</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p class="empty" id="docs-empty" hidden>No sources yet — upload the first below.</p>
+        <details class="uploader">
+        <summary>Upload a source (PDF or .docx, up to 256 MiB)</summary>
+        <form id="upload" style="margin-top: .75rem">
+          <div class="row" style="margin-top:.5rem">
+            <div style="flex: 2 1 14rem"><label for="up-file">File</label><input id="up-file" type="file" accept="application/pdf,.pdf,.docx" required></div>
+            <div><label for="up-title">Title</label><input id="up-title" placeholder="optional"></div>
+          </div>
+          <div class="row" style="margin-top:.4rem">
+            <div><label for="up-authors">Authors</label><input id="up-authors" placeholder="Separate with semicolons"></div>
+            <div style="flex:0 1 7rem"><label for="up-year">Year</label><input id="up-year" type="number" min="0" max="2100"></div>
+            <div style="flex:0 0 auto"><button type="submit" id="up-go">Upload &amp; build agent</button></div>
+          </div>
+          <details class="extras">
+            <summary>Scholarly extras — verbatim citation &amp; annotation</summary>
+            <label for="up-citation">Full citation (verbatim — supersedes the derived MLA entry)</label>
+            <input id="up-citation" maxlength="2000" autocomplete="off">
+            <label for="up-annotation">Annotation (a sentence or two — yours wins over the derived line)</label>
+            <input id="up-annotation" maxlength="500" autocomplete="off">
+          </details>
+        </form>
+        </details>
+        <details class="uploader">
+        <summary>Redeem a syndication code</summary>
+        <div class="row" style="margin-top:.75rem">
+          <div><label for="syn-code">Code from a colleague</label><input id="syn-code" autocomplete="off" placeholder="smn_syn_…"></div>
+          <div style="flex:0 0 auto"><button type="button" id="syn-go">Add to my shelf</button></div>
+        </div>
+        <p class="status" id="syn-status" role="status"></p>
+        </details>
+        <p class="status" id="up-status" role="status"></p>
+      </div>
+      </div>
+
+      <aside class="rail">
+      <details class="card util">
+        <summary>Connector tokens <span class="railstat" id="tok-stat"></span></summary>
+        <div class="tablewrap"><table id="tok-table" hidden>
+          <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p class="empty" id="tok-empty" hidden>No active tokens.</p>
+        <div class="row" style="margin-top: 1rem">
+          <div><label for="tok-name">New token name</label><input id="tok-name" placeholder="Claude Desktop"></div>
+          <div style="flex:0 0 auto"><button id="tok-go">Mint token</button></div>
+        </div>
+        <p class="status" id="tok-status" role="status"></p>
+        <div id="tok-reveal" hidden class="reveal">
+          <div class="tokenbox"><code id="tok-new"></code><button type="button" id="tok-copy">Copy</button></div>
+          <p class="warn"><b>Shown once.</b> Suminar stores only a hash.</p>
+        </div>
+      </details>
+
+      <details class="card util">
+        <summary>Invites <span class="railstat" id="inv-stat"></span></summary>
+        <p class="sub" style="margin-bottom:.9rem">Bring a colleague into the
+        pilot — up to ten active codes per account.</p>
+        <div class="tablewrap"><table id="inv-table" hidden>
+          <thead><tr><th>Note</th><th>Uses</th><th>Expires</th><th>State</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p class="empty" id="inv-empty" hidden>No invite codes issued.</p>
+        <div class="row" style="margin-top: 1rem">
+          <div><label for="inv-note">Note</label><input id="inv-note" placeholder="who it's for (only you see this)"></div>
+          <div style="flex:0 1 7rem"><label for="inv-uses">Max uses</label><input id="inv-uses" type="number" value="1" min="1" max="100"></div>
+          <div style="flex:0 1 8rem"><label for="inv-days">Expires (days)</label><input id="inv-days" type="number" value="30" min="1" max="365"></div>
+          <div style="flex:0 0 auto"><button id="inv-go">Issue code</button></div>
+        </div>
+        <p class="status" id="inv-status" role="status"></p>
+        <div id="inv-reveal" hidden class="reveal">
+          <div class="tokenbox"><code id="inv-new"></code><button type="button" id="inv-copy">Copy</button></div>
+          <p class="warn"><b>Shown once.</b> Send it to your colleague with
+          the redeem link: https://suminar.ai/account/redeem</p>
+        </div>
+      </details>
+
+      <details class="card util">
+        <summary>Usage <span class="railstat" id="use-stat"></span></summary>
+        <div class="usage-grid" id="usage-grid"></div>
+        <p class="status" id="usage-status"></p>
+      </details>
+      </aside>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  // All state is one bearer token, kept in sessionStorage for this tab only.
+  let TOKEN = null;
+  try { TOKEN = sessionStorage.getItem("suminar_token"); } catch {}
+
+  const $ = (id) => document.getElementById(id);
+  const gate = $("gate"), dash = $("dash"), signout = $("signout");
+
+  function fmtDate(value) {
+    if (!value) return "—";
+    const d = new Date(value);
+    return isNaN(d) ? "—" : d.toISOString().slice(0, 10);
+  }
+  function fmtBytes(n) {
+    if (n >= 1_073_741_824) return (n / 1_073_741_824).toFixed(2) + " GiB";
+    if (n >= 1_048_576) return (n / 1_048_576).toFixed(1) + " MiB";
+    if (n >= 1024) return (n / 1024).toFixed(0) + " KiB";
+    return n + " B";
+  }
+  // XSS discipline: server-supplied strings only ever land via textContent.
+  function el(tag, attrs = {}, text) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  function setStatus(id, message, isError) {
+    const node = $(id);
+    node.className = "status" + (isError ? " err" : "");
+    node.textContent = message || "";
+  }
+  async function api(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (TOKEN) headers.set("authorization", "Bearer " + TOKEN);
+    const res = await fetch(path, { ...options, headers });
+    if (res.status === 401) { showGate("That token was not accepted — it may have been revoked."); throw new Error("unauthorized"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error_description || body.error || ("HTTP " + res.status));
+    return body;
+  }
+
+  function showGate(message) {
+    TOKEN = null;
+    try { sessionStorage.removeItem("suminar_token"); } catch {}
+    dash.hidden = true; gate.hidden = false; signout.hidden = true;
+    if (message) setStatus("gate-status", message, true);
+  }
+  async function enter(token) {
+    TOKEN = token;
+    try { sessionStorage.setItem("suminar_token", token); } catch {}
+    gate.hidden = true; dash.hidden = false; signout.hidden = false;
+    await Promise.all([loadDocs(), loadTokens(), loadInvites(), loadUsage()]).catch(() => {});
+  }
+
+  // ---- gate ----
+  $("gate-open").addEventListener("click", async () => {
+    const token = $("gate-token").value.trim();
+    if (!token.startsWith("suminar_")) return setStatus("gate-status", "Connector tokens start with suminar_", true);
+    setStatus("gate-status", "…");
+    try {
+      TOKEN = token;
+      await api("/api/account/tokens");
+      setStatus("gate-status", "");
+      await enter(token);
+    } catch (error) {
+      if (error.message !== "unauthorized") setStatus("gate-status", error.message, true);
+    }
+  });
+  $("rec-go").addEventListener("click", async () => {
+    setStatus("rec-status", "…");
+    try {
+      TOKEN = null;
+      const body = await api("/api/account/tokens", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: $("rec-email").value.trim(), password: $("rec-password").value, name: "Recovered token" }),
+      });
+      $("rec-token").textContent = body.connectorToken;
+      $("rec-reveal").hidden = false;
+      setStatus("rec-status", "");
+      TOKEN = body.connectorToken;
+      try { sessionStorage.setItem("suminar_token", TOKEN); } catch {}
+      setTimeout(() => enter(TOKEN), 2500);
+    } catch (error) {
+      if (error.message !== "unauthorized") setStatus("rec-status", error.message, true);
+      else setStatus("rec-status", "Sign-in failed — check the email and password.", true);
+    }
+  });
+  $("rec-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("rec-token").textContent); $("rec-copy").textContent = "Copied"; } catch {}
+  });
+  signout.addEventListener("click", () => showGate());
+
+  // ---- the shelf: owned documents plus syndicated agents ----
+  let SYN = { codes: [], granted: [], received: [] };
+  async function loadDocs() {
+    const [docsBody, synBody] = await Promise.all([
+      api("/documents"),
+      api("/api/account/syndications").catch(() => ({ codes: [], granted: [], received: [] })),
+    ]);
+    SYN = synBody || { codes: [], granted: [], received: [] };
+    const rows = docsBody.documents || [];
+    const table = $("docs-table"), tbody = table.querySelector("tbody");
+    tbody.replaceChildren();
+    const total = rows.length + (SYN.received || []).length;
+    $("docs-empty").hidden = total > 0;
+    table.hidden = total === 0;
+    for (const doc of rows) {
+      // Compact row: chevron, the MLA citation, handle, status. Everything
+      // else lives in the disclosure row below (the Voices adaptation).
+      const tr = el("tr", { class: "docrow" });
+      const chev = el("span", { class: "chev" }, "▸");
+      const chevTd = el("td");
+      chevTd.append(chev);
+      tr.append(chevTd);
+      const src = el("td");
+      const cite = el("div", { class: "citeline" });
+      const citation = doc.agent?.citation;
+      if (citation?.verbatim) {
+        cite.append(document.createTextNode(citation.verbatim));
+      } else if (citation?.title) {
+        if (citation.authorsLabel) cite.append(document.createTextNode(citation.authorsLabel + " "));
+        cite.append(el("i", {}, citation.title));
+        const punct = /[.!?]$/.test(citation.title) ? "" : ".";
+        cite.append(document.createTextNode(punct + (citation.year ? " " + citation.year + "." : "")));
+      } else {
+        cite.append(document.createTextNode(doc.filename || "(unnamed)"));
+      }
+      src.append(cite);
+      tr.append(src);
+      tr.append(el("td", {}, doc.agent?.handle ? "@" + doc.agent.handle : "—"));
+      const st = el("td");
+      st.append(el("span", { class: "pill" + (doc.status === "failed" ? " bad" : doc.status === "ready" ? "" : " warn") }, doc.status));
+      tr.append(st);
+
+      // Disclosure: annotation with its provenance tier, file details, actions.
+      const detail = el("tr", { class: "detailrow", hidden: "" });
+      const dtd = el("td", { colspan: "4" });
+      const box = el("div", { class: "detailbox" });
+      if (doc.agent?.annotation) {
+        const anno = el("div", { class: "anno" }, doc.agent.annotation);
+        if (doc.agent.annotationSource) anno.append(el("span", { class: "tiertag" }, "· " + doc.agent.annotationSource));
+        box.append(anno);
+      }
+      box.append(el("div", { class: "detailmeta" },
+        (doc.filename || "") + " · uploaded " + fmtDate(doc.createdAt) + (doc.byteSize ? " · " + fmtBytes(doc.byteSize) : "")));
+      const rowStatus = el("p", { class: "status", role: "status" });
+      const exportsBox = el("div", { class: "exports" });
+      const actions = el("div", { class: "detailactions" });
+      const exportBtn = el("button", { class: "ghost", type: "button" }, "Export");
+      exportBtn.addEventListener("click", () => exportDoc(doc.documentId, exportsBox, rowStatus));
+      const renameBtn = el("button", { class: "ghost", type: "button" }, "Rename");
+      renameBtn.addEventListener("click", async () => {
+        const current = doc.agent?.handle ?? "";
+        const next = prompt("New @handle for this source agent:", current);
+        if (!next || !next.trim() || next.trim() === current) return;
+        rowStatus.className = "status"; rowStatus.textContent = "Renaming…";
+        try {
+          await api("/documents/" + encodeURIComponent(doc.documentId) + "/process", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ handle: next.trim() }),
+          });
+          await loadDocs();
+        } catch (error) {
+          rowStatus.className = "status err"; rowStatus.textContent = error.message;
+        }
+      });
+      const reBtn = el("button", { class: "ghost", type: "button" }, "Reprocess");
+      reBtn.addEventListener("click", async () => {
+        rowStatus.className = "status"; rowStatus.textContent = "Reprocessing — extraction and annotation re-derive…";
+        try {
+          await api("/documents/" + encodeURIComponent(doc.documentId) + "/process", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          await loadDocs();
+        } catch (error) {
+          rowStatus.className = "status err"; rowStatus.textContent = error.message;
+        }
+      });
+      const delBtn = el("button", { class: "danger", type: "button" }, "Delete");
+      delBtn.addEventListener("click", () => deleteDoc(doc.documentId, doc.filename));
+      const draftBox = el("div");
+      const synBox = el("div");
+      if (doc.agent) {
+        // Active grants for this agent, with the grantee identity: syndication
+        // is a direct personal handoff, so the sharer sees who holds it.
+        const myGrants = (SYN.granted || []).filter((grant) => grant.agentId === doc.agent.agentId);
+        if (myGrants.length) {
+          const grantsWrap = el("div", { style: "margin-top:.7rem" });
+          grantsWrap.append(el("span", { class: "label" }, "Syndicated to"));
+          for (const grant of myGrants) {
+            const line = el("div", { style: "margin-top:.35rem; font-size:.8125rem;" }, grant.granteeEmail + " · since " + fmtDate(grant.createdAt) + " ");
+            const revokeGrant = el("button", { class: "danger", type: "button", style: "margin-left:.5rem" }, "Revoke");
+            revokeGrant.addEventListener("click", async () => {
+              try {
+                await api("/api/account/syndications/grants/" + encodeURIComponent(grant.grantId) + "/revoke", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+                await loadDocs();
+              } catch (error) { rowStatus.className = "status err"; rowStatus.textContent = error.message; }
+            });
+            line.append(revokeGrant);
+            grantsWrap.append(line);
+          }
+          box.append(grantsWrap);
+        }
+        // Draft with the answer model; nothing persists until Approve sends
+        // the (freely editable) text through as a supplied-tier annotation.
+        const draftBtn = el("button", { class: "ghost", type: "button" }, "Draft annotation");
+        draftBtn.addEventListener("click", async () => {
+          rowStatus.className = "status"; rowStatus.textContent = "Drafting with the answer model…";
+          draftBtn.disabled = true;
+          try {
+            const body = await api("/documents/" + encodeURIComponent(doc.documentId) + "/draft-annotation", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+            rowStatus.textContent = "";
+            const ta = el("textarea", { class: "draftta", maxlength: "500" });
+            ta.value = body.draft;
+            const approve = el("button", { type: "button" }, "Approve annotation");
+            approve.addEventListener("click", async () => {
+              rowStatus.className = "status"; rowStatus.textContent = "Saving…";
+              try {
+                await api("/documents/" + encodeURIComponent(doc.documentId) + "/process", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ annotation: ta.value.trim() }) });
+                await loadDocs();
+              } catch (error) { rowStatus.className = "status err"; rowStatus.textContent = error.message; }
+            });
+            const discard = el("button", { class: "ghost", type: "button", style: "margin-left:.5rem" }, "Discard");
+            discard.addEventListener("click", () => draftBox.replaceChildren());
+            const wrap = el("div", { class: "draftwrap" });
+            wrap.append(el("span", { class: "label" }, "Drafted — edit freely; nothing is saved until you approve"), ta);
+            const buttonRow = el("div", { style: "margin-top:.5rem" });
+            buttonRow.append(approve, discard);
+            wrap.append(buttonRow);
+            draftBox.replaceChildren(wrap);
+          } catch (error) {
+            rowStatus.className = "status err"; rowStatus.textContent = error.message;
+          } finally {
+            draftBtn.disabled = false;
+          }
+        });
+        const synBtn = el("button", { class: "ghost", type: "button" }, "Syndicate");
+        synBtn.addEventListener("click", async () => {
+          rowStatus.className = "status"; rowStatus.textContent = "Minting a syndication code…";
+          synBtn.disabled = true;
+          try {
+            const body = await api("/api/account/syndications", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId: doc.agent.agentId }) });
+            rowStatus.textContent = "";
+            const wrap = el("div", { class: "reveal", style: "margin-top:.8rem" });
+            const tokenbox = el("div", { class: "tokenbox" });
+            const codeEl = el("code", {}, body.code);
+            const copyBtn = el("button", { type: "button" }, "Copy");
+            copyBtn.addEventListener("click", async () => { try { await navigator.clipboard.writeText(body.code); copyBtn.textContent = "Copied"; } catch {} });
+            tokenbox.append(codeEl, copyBtn);
+            const warn = el("p", { class: "warn" });
+            warn.append(el("b", {}, "Shown once. "), document.createTextNode("Send it to a colleague; they redeem it under their own shelf. The source never leaves your custody, and you can revoke the grant here at any time."));
+            wrap.append(tokenbox, warn);
+            synBox.replaceChildren(wrap);
+          } catch (error) {
+            rowStatus.className = "status err"; rowStatus.textContent = error.message;
+          } finally {
+            synBtn.disabled = false;
+          }
+        });
+        actions.append(exportBtn, renameBtn, draftBtn, synBtn, reBtn, delBtn);
+      } else {
+        actions.append(exportBtn, renameBtn, reBtn, delBtn);
+      }
+      box.append(actions, draftBox, synBox, exportsBox, rowStatus);
+      dtd.append(box);
+      detail.append(dtd);
+
+      tr.addEventListener("click", () => {
+        const open = detail.hidden;
+        detail.hidden = !open;
+        chev.textContent = open ? "▾" : "▸";
+      });
+      tbody.append(tr, detail);
+    }
+
+    // Syndicated agents join the same bibliography, badged, with custody
+    // spelled out and a single action: leaving.
+    for (const received of (SYN.received || [])) {
+      const tr = el("tr", { class: "docrow" });
+      const chev = el("span", { class: "chev" }, "▸");
+      const chevTd = el("td");
+      chevTd.append(chev);
+      tr.append(chevTd);
+      const src = el("td");
+      const cite = el("div", { class: "citeline" });
+      const citation = received.citation;
+      if (citation?.verbatim) {
+        cite.append(document.createTextNode(citation.verbatim));
+      } else if (citation?.title) {
+        if (citation.authorsLabel) cite.append(document.createTextNode(citation.authorsLabel + " "));
+        cite.append(el("i", {}, citation.title));
+        cite.append(document.createTextNode((/[.!?]$/.test(citation.title) ? "" : ".") + (citation.year ? " " + citation.year + "." : "")));
+      } else {
+        cite.append(document.createTextNode(received.displayName || received.localHandle));
+      }
+      src.append(cite);
+      tr.append(src);
+      tr.append(el("td", {}, "@" + received.localHandle));
+      const st = el("td");
+      st.append(el("span", { class: "pill warn" }, "syndicated"));
+      tr.append(st);
+      const detail = el("tr", { class: "detailrow", hidden: "" });
+      const dtd = el("td", { colspan: "4" });
+      const box = el("div", { class: "detailbox" });
+      if (received.annotation) {
+        const anno = el("div", { class: "anno" }, received.annotation);
+        if (received.annotationSource) anno.append(el("span", { class: "tiertag" }, "· " + received.annotationSource));
+        box.append(anno);
+      }
+      box.append(el("div", { class: "detailmeta" }, "syndicated by " + received.grantorEmail + " · since " + fmtDate(received.createdAt) + " · the source stays in its owner's custody and cannot be exported"));
+      const rowStatus = el("p", { class: "status", role: "status" });
+      const actions = el("div", { class: "detailactions" });
+      const removeBtn = el("button", { class: "danger", type: "button" }, "Remove from my shelf");
+      removeBtn.addEventListener("click", async () => {
+        try {
+          await api("/api/account/syndications/grants/" + encodeURIComponent(received.grantId) + "/revoke", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          await loadDocs();
+        } catch (error) { rowStatus.className = "status err"; rowStatus.textContent = error.message; }
+      });
+      actions.append(removeBtn);
+      box.append(actions, rowStatus);
+      dtd.append(box);
+      detail.append(dtd);
+      tr.addEventListener("click", () => {
+        const open = detail.hidden;
+        detail.hidden = !open;
+        chev.textContent = open ? "▾" : "▸";
+      });
+      tbody.append(tr, detail);
+    }
+  }
+  // Export feedback renders inside the row that was clicked — links and
+  // errors both — never in a distant status line (found live 2026-07-14).
+  async function exportDoc(id, box, statusNode) {
+    statusNode.className = "status"; statusNode.textContent = "Preparing export…";
+    try {
+      const body = await api("/documents/" + encodeURIComponent(id) + "/export");
+      box.replaceChildren(el("span", { class: "label" }, "Export links (valid 10 minutes): "));
+      for (const file of body.files || []) {
+        box.append(el("a", { href: file.url, target: "_blank", rel: "noopener", style: "margin-right:.8rem" }, file.kind));
+      }
+      statusNode.textContent = "";
+    } catch (error) {
+      statusNode.className = "status err"; statusNode.textContent = error.message;
+    }
+  }
+  async function deleteDoc(id, name) {
+    if (!confirm('Delete "' + (name || id) + '" and its agent? This removes the stored original and all derivatives.')) return;
+    setStatus("up-status", "Deleting…");
+    try {
+      await api("/documents/" + encodeURIComponent(id), { method: "DELETE" });
+      setStatus("up-status", "Deleted.");
+      await Promise.all([loadDocs(), loadUsage()]);
+    } catch (error) { setStatus("up-status", error.message, true); }
+  }
+  $("upload").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const file = $("up-file").files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.set("file", file);
+    if ($("up-title").value.trim()) form.set("title", $("up-title").value.trim());
+    if ($("up-authors").value.trim()) form.set("authors", $("up-authors").value.trim());
+    if ($("up-year").value) form.set("year", $("up-year").value);
+    if ($("up-citation").value.trim()) form.set("citation", $("up-citation").value.trim());
+    if ($("up-annotation").value.trim()) form.set("annotation", $("up-annotation").value.trim());
+    $("up-go").disabled = true;
+    setStatus("up-status", "Uploading and building the agent — extraction and embeddings can take a minute…");
+    try {
+      const body = await api("/documents", { method: "POST", body: form });
+      setStatus("up-status", body.status === "ready" ? "Agent ready." : "Status: " + body.status + (body.error_description ? " — " + body.error_description : ""));
+      $("upload").reset();
+      await Promise.all([loadDocs(), loadUsage()]);
+    } catch (error) {
+      setStatus("up-status", error.message, true);
+    } finally {
+      $("up-go").disabled = false;
+    }
+  });
+
+  // ---- syndication redemption ----
+  $("syn-go").addEventListener("click", async () => {
+    setStatus("syn-status", "…");
+    try {
+      const body = await api("/api/account/syndications/redeem", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: $("syn-code").value.trim() }) });
+      setStatus("syn-status", "Added to your shelf as @" + body.localHandle + ".");
+      $("syn-code").value = "";
+      await loadDocs();
+    } catch (error) { setStatus("syn-status", error.message, true); }
+  });
+
+  // ---- tokens ----
+  async function loadTokens() {
+    const body = await api("/api/account/tokens");
+    const rows = body.tokens || [];
+    $("tok-stat").textContent = rows.length ? rows.length + " active" : "";
+    const table = $("tok-table"), tbody = table.querySelector("tbody");
+    tbody.replaceChildren();
+    $("tok-empty").hidden = rows.length > 0;
+    table.hidden = rows.length === 0;
+    for (const token of rows) {
+      const tr = el("tr");
+      tr.append(el("td", {}, token.name));
+      tr.append(el("td", { class: "num" }, fmtDate(token.createdAt)));
+      tr.append(el("td", { class: "num" }, fmtDate(token.lastUsedAt)));
+      const actions = el("td");
+      const revoke = el("button", { class: "danger", type: "button" }, "Revoke");
+      revoke.addEventListener("click", async () => {
+        if (!confirm('Revoke "' + token.name + '"? Anything connected with it stops working.')) return;
+        try { await api("/api/account/tokens/" + encodeURIComponent(token.tokenId), { method: "DELETE" }); await loadTokens(); }
+        catch (error) { setStatus("tok-status", error.message, true); }
+      });
+      actions.append(revoke);
+      tr.append(actions);
+      tbody.append(tr);
+    }
+  }
+  $("tok-go").addEventListener("click", async () => {
+    setStatus("tok-status", "…");
+    try {
+      const body = await api("/api/account/tokens", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: $("tok-name").value.trim() || "Connector token" }),
+      });
+      $("tok-new").textContent = body.connectorToken;
+      $("tok-reveal").hidden = false;
+      $("tok-name").value = "";
+      setStatus("tok-status", "");
+      await loadTokens();
+    } catch (error) { setStatus("tok-status", error.message, true); }
+  });
+  $("tok-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("tok-new").textContent); $("tok-copy").textContent = "Copied"; } catch {}
+  });
+
+  // ---- invites ----
+  async function loadInvites() {
+    const body = await api("/api/account/invites");
+    const rows = body.invites || [];
+    const activeCount = rows.filter((invite) => !invite.revokedAt && new Date(invite.expiresAt) > new Date() && invite.useCount < invite.maxUses).length;
+    $("inv-stat").textContent = activeCount ? activeCount + " active" : "";
+    const table = $("inv-table"), tbody = table.querySelector("tbody");
+    tbody.replaceChildren();
+    $("inv-empty").hidden = rows.length > 0;
+    table.hidden = rows.length === 0;
+    for (const invite of rows) {
+      const expired = new Date(invite.expiresAt) <= new Date();
+      const exhausted = invite.useCount >= invite.maxUses;
+      const state = invite.revokedAt ? "revoked" : expired ? "expired" : exhausted ? "used up" : "active";
+      const tr = el("tr");
+      tr.append(el("td", {}, invite.note || "—"));
+      tr.append(el("td", { class: "num" }, invite.useCount + " / " + invite.maxUses));
+      tr.append(el("td", { class: "num" }, fmtDate(invite.expiresAt)));
+      const st = el("td");
+      st.append(el("span", { class: "pill" + (state === "active" ? "" : state === "revoked" ? " bad" : " warn") }, state));
+      tr.append(st);
+      const actions = el("td");
+      if (state === "active") {
+        const revoke = el("button", { class: "danger", type: "button" }, "Revoke");
+        revoke.addEventListener("click", async () => {
+          try { await api("/api/account/invites/" + encodeURIComponent(invite.inviteCodeId) + "/revoke", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); await loadInvites(); }
+          catch (error) { setStatus("inv-status", error.message, true); }
+        });
+        actions.append(revoke);
+      }
+      tr.append(actions);
+      tbody.append(tr);
+    }
+  }
+  $("inv-go").addEventListener("click", async () => {
+    setStatus("inv-status", "…");
+    try {
+      const body = await api("/api/account/invites", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          note: $("inv-note").value.trim() || undefined,
+          maxUses: Number($("inv-uses").value) || 1,
+          expiresInDays: Number($("inv-days").value) || 30,
+        }),
+      });
+      $("inv-new").textContent = body.code;
+      $("inv-reveal").hidden = false;
+      $("inv-note").value = "";
+      setStatus("inv-status", "");
+      await loadInvites();
+    } catch (error) { setStatus("inv-status", error.message, true); }
+  });
+  $("inv-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("inv-new").textContent); $("inv-copy").textContent = "Copied"; } catch {}
+  });
+
+  // ---- usage ----
+  async function loadUsage() {
+    try {
+      const body = await api("/api/account/usage");
+      $("use-stat").textContent = body.invocationsToday + "/" + body.limits.invocationsPerDay + " today";
+      const grid = $("usage-grid");
+      grid.replaceChildren();
+      const items = [
+        { label: "Invocations, last 24h", value: body.invocationsToday, cap: body.limits.invocationsPerDay, fmt: String },
+        { label: "Invocations, last 30 days", value: body.invocationsThisMonth, cap: body.limits.invocationsPerMonth, fmt: String },
+        { label: "Documents", value: body.documents, cap: body.limits.documents, fmt: String },
+        { label: "Storage", value: body.storageBytes, cap: body.limits.storageBytes, fmt: fmtBytes },
+      ];
+      for (const item of items) {
+        const cell = el("div");
+        cell.append(el("span", { class: "label" }, item.label));
+        cell.append(el("div", { class: "num" }, item.fmt(item.value)));
+        const meter = el("div", { class: "meter" });
+        meter.append(el("div", { style: "width:" + Math.min(100, (item.value / item.cap) * 100).toFixed(1) + "%" }));
+        cell.append(meter);
+        cell.append(el("div", { class: "cap" }, "of " + item.fmt(item.cap)));
+        grid.append(cell);
+      }
+      setStatus("usage-status", "");
+    } catch (error) { setStatus("usage-status", error.message, true); }
+  }
+
+  // ---- boot ----
+  if (TOKEN) enter(TOKEN); else showGate();
+</script>
+</body>
+</html>

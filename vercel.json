@@ -1,0 +1,27 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "npm run build",
+  "outputDirectory": "site",
+  "cleanUrls": true,
+  "functions": {
+    "api/extract.py": { "maxDuration": 300 },
+    "api/documents.js": { "maxDuration": 300 },
+    "api/mcp.js": { "maxDuration": 300 }
+  },
+  "rewrites": [
+    { "source": "/.well-known/oauth-protected-resource", "destination": "/api/oauth" },
+    { "source": "/.well-known/oauth-protected-resource/:path*", "destination": "/api/oauth" },
+    { "source": "/.well-known/oauth-authorization-server", "destination": "/api/oauth" },
+    { "source": "/.well-known/oauth-authorization-server/:path*", "destination": "/api/oauth" },
+    { "source": "/oauth/:path*", "destination": "/api/oauth" },
+    { "source": "/version", "destination": "/api/version" },
+    { "source": "/documents", "destination": "/api/documents" },
+    { "source": "/documents/:path*", "destination": "/api/documents" },
+    { "source": "/admin/:path*", "destination": "/api/admin" },
+    { "source": "/waitlist", "destination": "/api/waitlist" },
+    { "source": "/mcp", "destination": "/api/mcp" },
+    { "source": "/mcp/:path*", "destination": "/api/mcp" },
+    { "source": "/api/account/:path*", "destination": "/api/account" }
+  ]
+}

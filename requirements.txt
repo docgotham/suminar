@@ -1,0 +1,9 @@
+pypdf>=6.9,<7
+reportlab>=4.4,<5
+# Optional; required only for `ingest_pdf.py ocr-mistral`.
+mistralai>=1.12,<2
+
+# Hosted extraction (Vercel Python function api/extract.py). Not needed by the
+# open-kernel local pipeline, which uses pypdf above.
+PyMuPDF>=1.24,<2
+python-docx>=1.1,<2
