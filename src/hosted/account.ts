@@ -249,19 +249,28 @@ async function redeemSyndicationCode(client: SupabaseClient, owner: string, body
   const localHandle = candidates.find((candidate) => !taken.has(candidate))
     ?? `${candidates[candidates.length - 1]}-${(row.data.agent_id as string).slice(6, 12)}`;
 
-  const grant = await client.from("agent_syndication_grants").insert({
-    agent_id: row.data.agent_id,
-    grantor_user_id: row.data.grantor_user_id,
-    grantee_user_id: owner,
-    code_id: row.data.id,
-    local_handle: localHandle,
-  }).select("id").single();
-  if (grant.error) {
-    const limited = isPilotLimitMessage(grant.error.message);
-    return json({ error: limited ? "pilot_limit" : "invalid_request", error_description: limited ? grant.error.message : "That source agent is already on your roster." }, 400);
+  // The redemption itself is serialized in the database: the RPC locks the
+  // code row (SELECT ... FOR UPDATE), re-validates everything this handler
+  // pre-checked for friendly errors, inserts the grant, and increments the
+  // count in one transaction. The unlocked check-insert-increment it
+  // replaces could overshoot the cap under concurrent redemptions
+  // (pre-launch review finding).
+  const redeemed = await client.rpc("redeem_syndication_code", {
+    p_code_hash: sha256Hex(code),
+    p_grantee_user_id: owner,
+    p_local_handle: localHandle,
+  });
+  if (redeemed.error) {
+    const limited = isPilotLimitMessage(redeemed.error.message);
+    return json({ error: limited ? "pilot_limit" : "invalid_request", error_description: limited ? redeemed.error.message : "That source agent is already on your roster." }, 400);
   }
-  await client.from("agent_syndication_codes").update({ use_count: (row.data.use_count as number) + 1 }).eq("id", row.data.id);
-  return json({ grantId: grant.data.id, agentId: row.data.agent_id, localHandle, displayName: card.displayName ?? null }, 201);
+  const outcome = redeemed.data as { ok?: boolean; reason?: string; grantId?: string } | null;
+  if (outcome?.ok !== true) {
+    if (outcome?.reason === "own_agent") return json({ error: "invalid_request", error_description: "That is your own source agent." }, 400);
+    if (outcome?.reason === "already_granted") return json({ error: "invalid_request", error_description: "That source agent is already on your roster." }, 400);
+    return invalid();
+  }
+  return json({ grantId: outcome.grantId, agentId: row.data.agent_id, localHandle, displayName: card.displayName ?? null }, 201);
 }
 
 // Either side of a grant may end it: the grantor withdraws, or the grantee

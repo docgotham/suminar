@@ -84,21 +84,3 @@ in-conversation speech by @handle, refer to the work itself by its
 display-name citation ("Sowell's Affirmative Action Around the World
 argues…"). Note the prototype had no host agent, so the host-side register
 is new ground — evaluate with the same harness cases.
-
-## Known limitation: syndication redemption concurrency
-
-`redeemSyndicationCode` (src/hosted/account.ts) checks `use_count < max_uses`
-in the handler, then inserts the grant, then increments the count — with no
-row lock. Two different recipients redeeming the same code at the same
-instant could both pass the check and both succeed, overshooting the cap by
-one. Impact is a cap overshoot only; no recipient gains access they weren't
-handed a code for, and the tenant wall is untouched — it is the same class
-of accepted trade as fail-open rate limiting, surfaced by the 1.0
-pre-launch review (2026-07-14).
-
-The invite path already carries the correct pattern to copy: move
-redemption into a `security definer` RPC that does `select … for update` on
-the code row before checking and incrementing (see `redeem_invite_code` in
-`20260714110000_invites_waitlist.sql`). A `redeem_syndication_code` RPC
-plus a one-line handler change closes it. Deliberately deferred past the
-public flip so no fresh migration rides an irreversible launch step.
