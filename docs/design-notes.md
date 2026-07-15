@@ -84,20 +84,20 @@ in-conversation speech by @handle, refer to the work itself by its
 display-name citation ("Sowell's Affirmative Action Around the World
 argues…"). Note the prototype had no host agent, so the host-side register
 is new ground — evaluate with the same harness cases.
-## Known limitation: long-turn latency vs host client timeouts
+## Known limitation (residual): a single slow attempt vs host client budgets
 
-A worst-case source-agent turn (several retrieval rounds at medium
-reasoning, ~100s; longer if the service-level retry fires) can exceed a
-host MCP client's request timeout. Observed 2026-07-15: a 103-second
-discourse-shaped turn completed and stored its canonical answer, but the
-calling client had timed out at ~60s and showed an error. The room state
-stays consistent — the answer is in the conversation and later agents
-see it — but the host that timed out never displays it, and there is no
-re-display mechanism (hosts do not re-read past canonical turns; the
-messageId arrives only in the response that timed out). ChatGPT waited
-2.7 minutes happily; timeout budgets vary by host. Candidate mitigations
-when this bites in practice: skip the service-level retry when the first
-attempt already consumed most of a typical client budget; a recovery
-affordance that lets a host fetch undisplayed canonical turns since its
-cursor; or per-deployment round/effort tuning. Deferred until a real
-host shows the failure more than rarely.
+Mostly addressed in 1.0.4 after the failure bit twice in one real ChatGPT
+thread (2026-07-15): every synchronization now resupplies the last three
+canonical turns under a conditional display contract (the host skips
+blocks already visible, displays any that are missing), so an answer
+whose response the client abandoned heals on the next call — including
+the failure and proposal result shapes. A slow-retry cutoff (45s) keeps
+the service-level retry from pushing calls past observed client budgets
+(~45-60s). The residual: a single generation attempt can still run
+~100s at medium reasoning and outlive an impatient client — that turn's
+answer lands and heals one exchange later, but the user sees a transient
+error first. If that residue proves annoying in practice, the
+protocol-correct fix is SSE progress notifications on the POST response
+(MCP clients reset their timeout on progress) — weigh against the
+deliberately pinned JSON transport (see the 2026-07-14 SSE bug history)
+— or per-deployment round/effort tuning.
