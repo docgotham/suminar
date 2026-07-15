@@ -745,6 +745,56 @@ describe("roomless host-conversation event stream", () => {
     expect(clean.hostConductNotices).toBeUndefined();
   });
 
+  it("retries a transient generation failure once and surfaces a failure only when both attempts fail", async () => {
+    let flakyCalls = 0;
+    const flaky: AnswerGenerator = {
+      async generate() {
+        flakyCalls += 1;
+        if (flakyCalls === 1) throw new Error("transient upstream failure");
+        return answer;
+      },
+    };
+    const flakyService = createSuminarConversationService(config, store, { answerGenerator: flaky });
+    const sync = await flakyService.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "@scholar-2024 answer despite one transient failure")],
+    });
+    const recovered = await flakyService.invokeAgents({
+      conversationToken: sync.conversationToken,
+      throughCursor: sync.cursor,
+      targetHandles: ["scholar-2024"],
+    });
+    expect(flakyCalls).toBe(2);
+    expect(recovered.failures).toEqual([]);
+    expect(recovered.messages[0]?.authoredMessage).toBe(answer);
+    expect(store.readConversationEvents(sync.conversationToken).at(-1)).toMatchObject({
+      speakerType: "source_agent",
+      fidelity: "canonical_source_agent",
+    });
+
+    let brokenCalls = 0;
+    const broken: AnswerGenerator = {
+      async generate() {
+        brokenCalls += 1;
+        throw new Error("persistent failure");
+      },
+    };
+    const brokenService = createSuminarConversationService(config, store, { answerGenerator: broken });
+    const sync2 = await brokenService.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "@scholar-2024 this address keeps failing")],
+    });
+    const failed = await brokenService.invokeAgents({
+      conversationToken: sync2.conversationToken,
+      throughCursor: sync2.cursor,
+      targetHandles: ["scholar-2024"],
+    });
+    expect(brokenCalls).toBe(2);
+    expect(failed.messages).toEqual([]);
+    expect(failed.failures[0]).toMatchObject({ handle: "scholar-2024" });
+    expect(store.readConversationEvents(sync2.conversationToken).at(-1)?.speakerType).toBe("user");
+  });
+
 });
 
 describe("bare assent ratification wording", () => {

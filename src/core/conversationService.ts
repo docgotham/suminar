@@ -616,16 +616,29 @@ export class ConversationService {
         },
       };
       let response;
-      if (agent.transport === "local") {
-        const manifest = await this.store.getLocalAgentManifest(agent.localAgentId ?? agent.agentId);
-        card = manifest.card;
-        response = await this.localInvoker.invoke(manifest, envelope);
-        validateResponseEnvelope(response, card, envelope);
-      } else {
-        response = await this.transports[agent.transport].invoke(agent, card, envelope);
-      }
-      if (response.agentCardDigest !== digestJson(card) || response.contentHash !== sha256(response.authoredMessage)) {
-        throw new Error("Canonical response failed final integrity checks");
+      // Generation and validation are stochastic: a draft can fail
+      // quotation verification, or the upstream model call can fail
+      // transiently. One clean re-attempt before the failure surfaces —
+      // retry-then-refuse, never refuse-first (and never repair).
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          if (agent.transport === "local") {
+            const manifest = await this.store.getLocalAgentManifest(agent.localAgentId ?? agent.agentId);
+            card = manifest.card;
+            response = await this.localInvoker.invoke(manifest, envelope);
+            validateResponseEnvelope(response, card, envelope);
+          } else {
+            response = await this.transports[agent.transport].invoke(agent, card, envelope);
+          }
+          if (response.agentCardDigest !== digestJson(card) || response.contentHash !== sha256(response.authoredMessage)) {
+            throw new Error("Canonical response failed final integrity checks");
+          }
+          break;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          console.error(`[suminar] invocation attempt ${attempt} failed for @${agent.handle} (invocation ${envelope.invocationId}): ${detail}`);
+          if (attempt >= 2) throw error;
+        }
       }
       const responseSequence = conversation.lastSequence + 1;
       await this.store.appendConversationEvent(conversation.conversationToken, {

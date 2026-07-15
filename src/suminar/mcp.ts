@@ -178,7 +178,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
   }
   const blocks = result.messages.map((message) => message.displayText).join("\n\n");
   const failureNotice = result.failures.length
-    ? `\n\nSuminar did not return an admissible canonical response from ${result.failures.map((failure) => `@${failure.handle}`).join(", ")}.`
+    ? `\n\n${result.failures.map((failure) => `@${failure.handle}`).join(", ")} could not complete a verifiable response on this attempt. Addressing ${result.failures.length > 1 ? "them" : "it"} again may succeed.`
     : "";
   const contract = result.visibleHostAddress
     ? `VISIBLE TURN ORDER CONTRACT: ${SHARED_CONTRACT_CORE} The host-authored @address below is your own already-recorded speech, not the user's: display it exactly first, then each source-agent block exactly and in order.`
@@ -197,7 +197,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
     : [];
   const sourceSections = result.messages.length
     ? ["BEGIN CANONICAL SOURCE-AGENT BLOCKS", blocks, `END CANONICAL SOURCE-AGENT BLOCKS${failureNotice}`]
-    : [`Suminar did not return an admissible canonical response from ${result.failures.map((failure) => `@${failure.handle}`).join(", ") || "the addressed source agent"}.`];
+    : [`${result.failures.map((failure) => `@${failure.handle}`).join(", ") || "The addressed source agent"} could not complete a verifiable response on this attempt. Addressing ${result.failures.length > 1 ? "them" : "it"} again may succeed.`];
   const text = [
     contract,
     ...ratifiedSection,
@@ -266,7 +266,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
 }
 
 function invocationFailure(detail: string) {
-  const requiredDisclosure = "Suminar did not return an admissible canonical source-agent response.";
+  const requiredDisclosure = "The addressed source agent could not complete a verifiable response on this attempt. Addressing it again may succeed.";
   return toolResult([
     "HOST FAILURE CONTRACT: Say only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path.",
     requiredDisclosure,
