@@ -44,6 +44,32 @@ function naturalOrderSurname(author: string): string {
   return tokens.slice(start, index + 1).join(" ").replace(/,$/, "");
 }
 
+// Works with no personal byline are cited by their corporate author — a
+// research brief or report authored by an organization, common in policy and
+// institutional literature. A corporate author is not inverted ("National
+// Communication Association", never "Association, National"), and its handle
+// comes from an acronym, not a surname.
+const CORPORATE_KEYWORDS = /\b(?:association|institute|institution|foundation|centre|center|council|society|bureau|commission|committee|organi[sz]ation|ministry|agency|administration|corporation|corp|university|college|school|press|authority|coalition|consortium|federation|academy|observatory|forum|department|laboratory|initiative|alliance|network|fund|trust|board|office|service|union|league|group|company|inc|llc)\b/i;
+const ORG_HANDLE_STOPWORDS = new Set(["of", "the", "and", "for", "in", "on", "a", "an"]);
+
+export function isCorporateAuthor(name: string): boolean {
+  return CORPORATE_KEYWORDS.test(name.trim());
+}
+
+// A handle prefix for a corporate author: its acronym when that reads well
+// (2–5 significant initials — "National Communication Association" → "nca"),
+// otherwise its first significant word ("Brookings" → "brookings").
+export function orgHandlePrefix(name: string): string {
+  const words = name.trim().split(/\s+/)
+    .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter(Boolean);
+  const significant = words.filter((word) => !ORG_HANDLE_STOPWORDS.has(word.toLowerCase()));
+  if (significant.length >= 2 && significant.length <= 5) {
+    return significant.map((word) => word[0]!).join("").toLowerCase();
+  }
+  return slugifyName(significant[0] ?? name);
+}
+
 // A title's main segment ends at the first colon or semicolon — or at a
 // spaced dash, which is both a subtitle style and the tail every
 // browser-saved PDF carries ("A Great Man, Warts and All – Commentary
@@ -83,7 +109,9 @@ export interface NamingIdentity {
 // step taken only when everything shorter is already claimed by a sibling
 // agent. Deterministic, so reprocessing the same source lands the same place.
 export function handleCandidates(identity: NamingIdentity, maxCandidates = 12): string[] {
-  const surname = identity.authors[0] ? surnameOf(identity.authors[0]) : "";
+  const surname = identity.authors[0]
+    ? (isCorporateAuthor(identity.authors[0]) ? orgHandlePrefix(identity.authors[0]) : surnameOf(identity.authors[0]))
+    : "";
   const words = significantTitleWords(identity.title);
   const prefix = surname ? [surname] : [];
   const candidates: string[] = [];
@@ -127,6 +155,7 @@ export function mainTitle(title: string): string {
 // Already-inverted input passes through; a mononym stays itself.
 export function invertFirstAuthor(author: string): string {
   const trimmed = author.trim();
+  if (isCorporateAuthor(trimmed)) return trimmed; // corporate authors are never inverted
   const surname = surnameOf(trimmed);
   if (!surname) return trimmed;
   if (trimmed.toLowerCase().startsWith(`${surname.toLowerCase()},`)) return trimmed;
@@ -173,7 +202,9 @@ export function mlaCitationParts(identity: NamingIdentity): MlaCitationParts {
 // for grace that slugs do not — but the subtitle stays dropped and the whole
 // thing is capped at a word boundary.
 export function deriveDisplayName(identity: NamingIdentity, maxTitleLength = 60): string {
-  const surname = identity.authors[0] ? surnameOf(identity.authors[0]) : "";
+  const surname = identity.authors[0]
+    ? (isCorporateAuthor(identity.authors[0]) ? identity.authors[0].trim() : surnameOf(identity.authors[0]))
+    : "";
   let title = (identity.title.split(SUBTITLE_BOUNDARY)[0] ?? "").trim();
   if (title.length > maxTitleLength) {
     const cut = title.slice(0, maxTitleLength);

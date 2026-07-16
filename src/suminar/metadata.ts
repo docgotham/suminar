@@ -73,9 +73,10 @@ function cleanYear(value: unknown): number | undefined {
 const EXTRACTION_INSTRUCTIONS = [
   "You extract bibliographic metadata from the opening pages of a source document for a citation.",
   "Use ONLY what is printed in the provided text. Do not infer from outside knowledge, and do not guess. If a field is not present in the text, return null for it.",
-  "Authors are the people who wrote the work, in natural reading order. Exclude 'Corresponding author', emails, affiliations, departments, editors, and translators.",
+  "authors are the individual people who wrote the work, in natural reading order — exclude 'Corresponding author', emails, affiliations, departments, editors, and translators; null if the work has no personal byline.",
+  "corporateAuthor is the organization credited as the author when NO individual person is bylined (e.g. a research brief, report, or white paper authored by an association, institute, or agency). Null if there are personal authors, or if no organization is credited as author (do not put a mere publisher here).",
   "Return ONLY a JSON object with these keys and no prose:",
-  '{"title": string|null, "authors": string[]|null, "year": integer|null, "publicationDate": string|null, "doi": string|null, "publication": string|null}',
+  '{"title": string|null, "authors": string[]|null, "corporateAuthor": string|null, "year": integer|null, "publicationDate": string|null, "doi": string|null, "publication": string|null}',
   "publicationDate is the full date exactly as printed if one appears (e.g. \"March 15, 2026\"); otherwise null. publication is the journal, magazine, or publisher name if printed.",
 ].join(" ");
 
@@ -97,12 +98,20 @@ async function extractFromDocument(frontMatter: string, openai: OpenAI, model: s
   const rawTitle = cleanString(parsed.title);
   const title = rawTitle ? normalizeTitleCase(rawTitle) : undefined;
   const authors = cleanAuthors(parsed.authors);
+  // No personal byline? Fall back to the credited organization (MLA corporate
+  // author). Not run through cleanAuthors — that filter rejects org words like
+  // "Association"/"University" that are exactly what belongs here.
+  const corporateAuthor = !authors ? cleanString(parsed.corporateAuthor, 200) : undefined;
   const year = cleanYear(parsed.year);
   const publicationDate = cleanString(parsed.publicationDate, 100);
   const doi = cleanString(parsed.doi, 200)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
   const publication = cleanString(parsed.publication, 300);
   if (title) { proposal.title = title; proposal.provenance.title = "document"; }
   if (authors) { proposal.authors = authors; proposal.provenance.authors = "document"; }
+  else if (corporateAuthor && /\p{L}/u.test(corporateAuthor) && !/@|https?:/i.test(corporateAuthor)) {
+    proposal.authors = [corporateAuthor];
+    proposal.provenance.authors = "document";
+  }
   if (year) { proposal.year = year; proposal.provenance.year = "document"; }
   if (publicationDate) { proposal.publicationDate = publicationDate; proposal.provenance.publicationDate = "document"; }
   if (doi && /10\.\d{4,9}\/\S+/.test(doi)) proposal.doi = doi.match(/10\.\d{4,9}\/\S+/)![0].replace(/[).,;]+$/, "");

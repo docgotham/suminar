@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveDisplayName, handleCandidates, invertFirstAuthor, mlaAuthorsLabel, mlaCitationParts, significantTitleWords, surnameOf } from "../src/suminar/naming.js";
+import { deriveDisplayName, handleCandidates, invertFirstAuthor, isCorporateAuthor, mlaAuthorsLabel, mlaCitationParts, orgHandlePrefix, significantTitleWords, surnameOf } from "../src/suminar/naming.js";
 
 // The MLA convention: scholars disambiguate one author's works with shortened
 // titles, not dates — so derived handles are surname + short title, display
@@ -157,5 +157,31 @@ describe("display names", () => {
     const long = deriveDisplayName({ authors: ["Someone Longwinded"], title: "A ".repeat(10) + "Genuinely Interminable Meandering Extended Discourse Upon Matters Various" });
     expect(long.length).toBeLessThan(90);
     expect(long.endsWith(")")).toBe(false);
+  });
+});
+
+describe("corporate authors", () => {
+  it("detects organizations and leaves personal names alone", () => {
+    expect(isCorporateAuthor("National Communication Association")).toBe(true);
+    expect(isCorporateAuthor("RAND Corporation")).toBe(true);
+    expect(isCorporateAuthor("Brookings Institution")).toBe(true);
+    expect(isCorporateAuthor("Thomas Sowell")).toBe(false);
+    expect(isCorporateAuthor("W.E.B. Du Bois")).toBe(false);
+  });
+
+  it("builds a handle prefix from an acronym, or a single word", () => {
+    expect(orgHandlePrefix("National Communication Association")).toBe("nca");
+    expect(orgHandlePrefix("Pew Research Center")).toBe("prc");
+    expect(orgHandlePrefix("Brookings")).toBe("brookings");
+  });
+
+  it("names a corporate-authored work by the org, uninverted, with an acronym handle", () => {
+    const identity = { authors: ["National Communication Association"], title: "Political Party Affiliation Among Academic Faculty", year: 2017 };
+    expect(handleCandidates(identity)[0]).toBe("nca-political-party");
+    expect(deriveDisplayName(identity).startsWith("National Communication Association, Political Party Affiliation")).toBe(true);
+    expect(invertFirstAuthor("National Communication Association")).toBe("National Communication Association");
+    expect(mlaCitationParts(identity).authorsLabel).toBe("National Communication Association.");
+    // a personal author is still inverted
+    expect(invertFirstAuthor("Thomas Sowell")).toBe("Sowell, Thomas");
   });
 });

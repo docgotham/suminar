@@ -110,6 +110,19 @@ describe("deriveMetadata", () => {
     expect(p.title).toBe("An All Caps Report on Things");
   });
 
+  it("uses the corporate author when a work has no personal byline", async () => {
+    const openai = stubOpenAI(JSON.stringify({ title: "A Research Brief", authors: null, corporateAuthor: "National Communication Association", year: 2017, doi: null }));
+    const p = await deriveMetadata({ frontMatter: "an institutional brief", openai, model: "gpt-5", allowWeb: false });
+    expect(p.authors).toEqual(["National Communication Association"]);
+    expect(p.provenance.authors).toBe("document");
+  });
+
+  it("prefers a personal author over a corporate one when both are offered", async () => {
+    const openai = stubOpenAI(JSON.stringify({ title: "A Study", authors: ["Jane Doe"], corporateAuthor: "Some Institute", year: 2020, doi: null }));
+    const p = await deriveMetadata({ frontMatter: "x", openai, model: "gpt-5", allowWeb: false });
+    expect(p.authors).toEqual(["Jane Doe"]);
+  });
+
   it("tolerates code-fenced JSON from the model", async () => {
     const openai = stubOpenAI("```json\n{\"title\": \"Fenced\", \"authors\": [\"X Y\"], \"year\": 2020}\n```");
     const p = await deriveMetadata({ frontMatter: "x", openai, model: "gpt-5", allowWeb: false });
