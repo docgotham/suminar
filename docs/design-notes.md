@@ -6,6 +6,67 @@ the reasoning survives across sessions and tools. Implementation of an entry
 should end with its removal from this file (the code and AGENTS.md become
 the record).
 
+## Bulk ingestion + the direct-to-Storage upload architecture (RESEARCHED, options for Dave — not yet approved)
+
+**Prompt:** Dave wants to consider letting someone upload many PDFs at once.
+Research done 2026-07-16 while he was out; this records findings + a
+recommendation, pending his decision.
+
+**The finding that reframes the whole thing.** Vercel serverless functions
+have a ~4.5 MB request-body limit. The current upload streams file bytes
+*through* `api/documents.js` (`request.formData()` → `arrayBuffer()`), so the
+advertised "256 MiB per upload" (`limits.ts uploadMaxBytes`, and the site copy
+in `site/index.html` + `site/account/index.html`) is **false**: a 6.2 MiB PDF
+returns `413 FUNCTION_PAYLOAD_TOO_LARGE` at the platform edge, before the code's
+own 256 MiB check runs (verified live against a throwaway). Today's 2 MB PDFs
+work only because they're under 4.5 MB. **This is a latent bug worth fixing
+regardless of bulk** — either correct the claim, or (better) remove the limit
+by changing the upload path.
+
+**The insight: the right way to build bulk is also the fix for large files —
+move uploads OFF the function and DIRECT to Supabase Storage.** supabase-js
+2.110 has `createSignedUploadUrl` / `uploadToSignedUrl` (confirmed present);
+`content_sha256` is only stored, never used for dedup, so the server no longer
+needs to see the bytes.
+
+**Layer 1 — direct-to-Storage upload (fixes large files AND is the substrate for bulk):**
+- `POST /documents/upload-url` → returns a Supabase signed upload URL + storage
+  key for a filename/mime (validates mime; no bytes through the function).
+- Client uploads bytes **browser → Supabase Storage** via `uploadToSignedUrl`,
+  bypassing the 4.5 MB limit (up to Storage's own, far larger, ceiling).
+- `POST /documents/register` → `{ storageKey, filename, mime, metadata? }`
+  creates the `documents` row (hash lazily or drop it) and kicks
+  `processDocument` (extract + embed) exactly as today; `/identify` then runs
+  per source as now.
+- Independently shippable for the *single*-file path first: fixes the large-PDF
+  bug with no UX change, and makes the 256 MiB claim true.
+
+**Layer 2 — bulk orchestration on top:**
+- **Option B (client-orchestrated, bounded concurrency) — RECOMMENDED FIRST.**
+  `<input multiple>` / drag-many → per file: get-url → direct-upload → register
+  → identify, ~3 concurrent. Per-file progress (queued → uploading → building →
+  identifying → ready / failed); partial failures isolated; every source lands
+  in the shelf with identified metadata + provenance chips ready to correct.
+  Reuses the entire proven pipeline. Tab-bound (a dozen ≈ a few minutes with
+  concurrency) with a "keep this tab open" note.
+- **Option D (server-durable queue) — LATER, only if users bulk-upload big
+  batches.** Register all as `queued` rows fast, drain with a worker (Supabase
+  Edge Function + pg_cron, or Vercel Cron). Survives tab close. Heavier; not
+  pilot-necessary, and Suminar has no worker tier today (pure Vercel+Supabase).
+
+**Constraints bulk must respect:**
+- Rate limits: `upload` 40/hr, `identify` 40/hr → a dozen is fine; a 40+ batch
+  hits the ceiling. With direct-to-Storage the register call is cheap, so
+  re-budget (a dedicated bulk/register limit) or gate batch size.
+- Per-file cost is unchanged (~10-20 s build + ~30-60 s identify); bulk is the
+  client iterating, and concurrency cuts wall-clock ~3×. No 300 s risk (each
+  register+process is a single file).
+
+**Recommended sequence:** (1) ship Layer 1 direct-to-Storage for single upload —
+fixes the large-file bug, corrects the 256 MiB claim, no UX change; (2) add the
+multiple-file client orchestration (Layer 2 Option B) on top; (3) defer the
+durable queue until a real user needs to close the tab mid-batch.
+
 ## Host over-deliberation: terrain fixes, never disposition fixes
 
 **The incident (2026-07-14, live seminar):** the host described an @handle
