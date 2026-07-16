@@ -53,8 +53,10 @@ describe("hosted rate limiting", () => {
     const defaults = hostedRateLimitRules({} as NodeJS.ProcessEnv);
     expect(defaults.mcpPerAccount).toMatchObject({ maxHits: 120, windowSeconds: 60 });
     expect(defaults.waitlistPerIp).toMatchObject({ maxHits: 5, windowSeconds: 3600 });
-    const tuned = hostedRateLimitRules({ SUMINAR_RATE_MCP_PER_MINUTE: "10", SUMINAR_RATE_UPLOADS_PER_HOUR: "junk" } as NodeJS.ProcessEnv);
+    expect(defaults.identifyPerAccount).toMatchObject({ maxHits: 40, windowSeconds: 3600 });
+    const tuned = hostedRateLimitRules({ SUMINAR_RATE_MCP_PER_MINUTE: "10", SUMINAR_RATE_UPLOADS_PER_HOUR: "junk", SUMINAR_RATE_IDENTIFY_PER_HOUR: "25" } as NodeJS.ProcessEnv);
     expect(tuned.mcpPerAccount.maxHits).toBe(10);
-    expect(tuned.uploadPerAccount.maxHits).toBe(20);
+    expect(tuned.uploadPerAccount.maxHits).toBe(40);
+    expect(tuned.identifyPerAccount.maxHits).toBe(25);
   });
 });

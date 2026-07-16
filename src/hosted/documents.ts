@@ -46,7 +46,8 @@ export async function handleHostedDocumentsRequest(request: Request, env: NodeJS
   // Account-keyed frequency limits on the expensive paths; fail-open (the
   // pilot volume quotas underneath fail closed).
   const rules = hostedRateLimitRules(env);
-  const gate = request.method === "POST" && (!documentId || ["process", "draft-annotation", "identify"].includes(action ?? "")) ? rules.uploadPerAccount
+  const gate = request.method === "POST" && (!documentId || ["process", "draft-annotation"].includes(action ?? "")) ? rules.uploadPerAccount
+    : request.method === "POST" && documentId && action === "identify" ? rules.identifyPerAccount
     : request.method === "POST" && documentId && action === "metadata" ? rules.accountPerOwner
     : request.method === "GET" && documentId && action === "export" ? rules.exportPerAccount
     : null;

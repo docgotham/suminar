@@ -51,10 +51,19 @@ export function hostedRateLimitRules(env: NodeJS.ProcessEnv = process.env) {
       maxHits: envInt(env, "SUMINAR_RATE_OAUTH_REGISTER_PER_10_MINUTES", 10),
       windowSeconds: 600,
     },
-    // Uploads run extraction and embeddings — the expensive pipeline.
+    // Uploads run extraction and embeddings — the expensive pipeline. Bulk
+    // pilot sessions upload many sources at once, so this is generous; the
+    // volume quotas underneath are the real ceiling.
     uploadPerAccount: {
       name: "upload",
-      maxHits: envInt(env, "SUMINAR_RATE_UPLOADS_PER_HOUR", 20),
+      maxHits: envInt(env, "SUMINAR_RATE_UPLOADS_PER_HOUR", 40),
+      windowSeconds: 3600,
+    },
+    // Auto-identify (gpt-5 + Crossref + web) fires once per drop. Its own
+    // budget, so a dozen drops don't consume the upload allowance twice over.
+    identifyPerAccount: {
+      name: "identify",
+      maxHits: envInt(env, "SUMINAR_RATE_IDENTIFY_PER_HOUR", 40),
       windowSeconds: 3600,
     },
     // Exports sign whole-bundle URLs. Generous: an owner testing their own
