@@ -84,6 +84,17 @@
   .handlechip:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent-tint) 60%, transparent); }
   .handlechip.copied { border-color: var(--accent); background: var(--accent-tint); color: var(--accent); }
 
+  /* The live strip: the current seminar's participants, pinned by liveness —
+     no selection, no cross-tab state; it appears when a record is growing
+     and fades when the seminar goes quiet. */
+  .livestrip {
+    border: 1px solid var(--accent); border-radius: 8px; padding: .5rem .6rem; margin: 0 0 .7rem;
+    background: color-mix(in srgb, var(--accent-tint) 55%, transparent);
+  }
+  .livestriphead { display: flex; align-items: baseline; gap: .45rem; font-size: .78125rem; min-width: 0; }
+  .livestriptitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .livestripchips { margin-top: .3rem; display: flex; flex-wrap: wrap; gap: .3rem .35rem; }
+  .livestripchips .handlechip { margin-top: 0; }
   .sem { padding: .55rem 0; border-bottom: 1px solid var(--line); }
   .sem .titleline { display: flex; align-items: baseline; gap: .5rem; }
   .sem .title { font-size: .875rem; font-weight: 600; flex: 1 1 auto; min-width: 0; }
@@ -123,6 +134,7 @@
   </div>
 
   <section id="pane-shelf">
+    <div id="live-strip" hidden></div>
     <input id="filter" type="search" placeholder="Filter sources — title, author, @handle…" autocomplete="off">
     <p class="status" id="pal-status" role="status"></p>
     <div id="palette"></div>
@@ -314,6 +326,29 @@
   }
   $("show-all").addEventListener("click", () => { SHOW_ALL = true; loadAll(); });
 
+  // The current seminar needs no selection: liveness IS the signal. While a
+  // record is growing, that seminar's participants pin to the top of the
+  // shelf as copy chips, labeled with its name; quiet seminars pin nothing.
+  function renderLiveStrip(seminars) {
+    const strip = $("live-strip");
+    strip.replaceChildren();
+    const now = Date.now();
+    const live = seminars.filter((seminar) =>
+      now - Date.parse(seminar.updatedAt) < 180000 && (seminar.participants || []).length);
+    for (const seminar of live.slice(0, 2)) {
+      const box = el("div", { class: "livestrip" });
+      const head = el("div", { class: "livestriphead" });
+      head.append(el("span", { class: "live" }, "live"));
+      head.append(el("span", { class: "livestriptitle" }, seminar.title || derivedTitle(seminar)));
+      box.append(head);
+      const chips = el("div", { class: "livestripchips" });
+      for (const participant of seminar.participants || []) chips.append(handleChip(participant.handle));
+      box.append(chips);
+      strip.append(box);
+    }
+    strip.hidden = live.length === 0;
+  }
+
   // ---- load + refresh ----
   async function loadAll() {
     try {
@@ -335,6 +370,7 @@
       applyFilter();
       $("pal-status").textContent = "";
       renderSeminars(semBody.seminars || []);
+      renderLiveStrip(semBody.seminars || []);
     } catch (error) {
       if (error.message !== "unauthorized") { $("pal-status").textContent = error.message; $("pal-status").className = "status err"; }
     }

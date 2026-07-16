@@ -99,13 +99,22 @@ Refresh: on focus + 60s while visible (stays inside accountPerOwner budget).
 **Increment 2 (open):** the seminar page — click a seminar → its canonical
 record, live-updating: every source-agent turn exactly as authored (badge,
 styled titles, citations), healing host-side display lossiness (orphaned
-answers, stripped badges); plus the two-tier palette ("In this seminar"
-participants pinned above the full shelf). Needs an owner-scoped events read
-(seminar id → ordered canonical turns; tokens stay server-side). **Renaming
-lives on the seminar page** (Dave, 2026-07-16): the record view is where a
-seminar is managed; the companion-home list becomes pure navigation and its
-interim ✎ relocates there when the page exists. Later rungs: per-seminar
-works-cited export, provenance/signature panel, markdown transcript export.
+answers, stripped badges). **Header = title + rename + participant chip
+strip** (Dave, 2026-07-16): the page carries its own people as copy chips in
+the header and needs no palette of its own — the full shelf stays one tab
+away. **Renaming lives here**: the record view is where a seminar is managed;
+the companion-home list becomes pure navigation and its interim ✎ relocates
+here. Needs an owner-scoped events read (seminar id → ordered canonical
+turns; tokens stay server-side). Later rungs: per-seminar works-cited export,
+provenance/signature panel, markdown transcript export.
+
+**The live strip (shipped 1.0.33):** "current seminar" is not a selection —
+liveness IS the signal. While a seminar's record is growing (updated within
+~3 min), its participants pin automatically to the top of the Shelf tab as a
+labeled chip strip, and fade when it goes quiet. This is the selection-free
+resolution of "pin my current seminar's agents": no cross-tab hidden state,
+no mode to forget, the pinning driven by reality. Seminars with no seated
+agents pin nothing.
 
 **Scale plan (implemented 1.0.32):** the shelf must survive 300 sources —
 search-first, not scan-first. The companion is two TABS (Shelf | Seminars,
