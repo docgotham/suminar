@@ -16,6 +16,7 @@ OCR API reading the rendered pages instead of PyMuPDF reading the embedded
 text layer — the cure for glyph-corrupted fonts (broken ToUnicode maps) and
 scans. Requires MISTRAL_API_KEY; the source travels to Mistral for that call.
 """
+import base64
 import hashlib
 import json
 import os
@@ -118,14 +119,21 @@ def extract_pdf(data: bytes):
 # ocr-mistral path (scripts/ingest_pdf.py) over plain REST — the signed source
 # URL is handed to Mistral directly, so the bytes never round-trip through
 # this function twice.
-def extract_pdf_ocr(source_url: str):
+def extract_pdf_ocr(data: bytes):
     api_key = os.environ.get("MISTRAL_API_KEY")
     if not api_key:
         raise ValueError("OCR is not configured on this deployment: MISTRAL_API_KEY is missing")
     PROGRESS["stage"] = "mistral ocr"
+    # Inline the document as a base64 data URI (mirrors the open-kernel
+    # ocr-mistral path) instead of handing Mistral the signed URL to fetch:
+    # a 19-page / 900 KB source timed out past 180s when Mistral had to pull it
+    # from Storage itself, while inline bytes OCR in a fraction of that. The
+    # function already holds the bytes (downloaded for the source hash), so
+    # this adds no round-trip.
+    document_url = "data:application/pdf;base64," + base64.b64encode(data).decode("ascii")
     payload = json.dumps({
         "model": "mistral-ocr-latest",
-        "document": {"type": "document_url", "document_url": source_url},
+        "document": {"type": "document_url", "document_url": document_url},
         "table_format": "markdown",
         "include_image_base64": False,
     }).encode("utf-8")
@@ -136,7 +144,7 @@ def extract_pdf_ocr(source_url: str):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with urllib.request.urlopen(request, timeout=200) as response:
             result = json.loads(response.read())
     except urllib.error.HTTPError as exc:  # noqa: PERF203
         detail = exc.read().decode("utf-8", "replace")[:300]
@@ -236,7 +244,7 @@ def extract_payload(source_url: str, kind: str, ocr: bool = False) -> dict:
     if ocr:
         if kind != "pdf":
             raise ValueError("OCR retry supports PDF sources only")
-        pages, status, report = extract_pdf_ocr(source_url)
+        pages, status, report = extract_pdf_ocr(data)
     elif kind == "docx":
         PROGRESS["stage"] = "docx text extraction"
         pages, status, report = extract_docx(data)
