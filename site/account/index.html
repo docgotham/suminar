@@ -221,7 +221,7 @@
         </table></div>
         <p class="empty" id="docs-empty" hidden>No sources yet — upload the first below.</p>
         <details class="uploader">
-        <summary>Upload a source (PDF or .docx, up to 256 MiB)</summary>
+        <summary>Upload a source (PDF or .docx)</summary>
         <form id="upload" style="margin-top: .75rem">
           <div class="row" style="margin-top:.5rem">
             <div style="flex: 2 1 14rem"><label for="up-file">File</label><input id="up-file" type="file" accept="application/pdf,.pdf,.docx" required></div>
@@ -726,6 +726,13 @@
     e.preventDefault();
     const file = $("up-file").files[0];
     if (!file) { setStatus("up-status", "Choose a file first — the file selection may have been lost if the page reloaded.", true); return; }
+    // Uploads currently stream through the API function, which the platform
+    // caps at ~4.5 MB. Catch it here with a clear message instead of a silent
+    // 413 (direct-to-Storage upload for large files is coming).
+    if (file.size > 4300000) {
+      setStatus("up-status", "This file is " + (file.size / 1048576).toFixed(1) + " MB. Uploads are currently limited to about 4 MB — support for larger files is on the way. For now you can compress or split the PDF.", true);
+      return;
+    }
     const form = new FormData();
     form.set("file", file);
     if ($("up-title").value.trim()) form.set("title", $("up-title").value.trim());
