@@ -430,16 +430,21 @@
     return setOpen;
   }
   // The citation line's title, styled per MLA by work type: quotation marks
-  // for a contained work (article, essay), italics for a standalone one and
-  // for the not-yet-classified (the pre-workType status quo).
+  // for a contained work (article, essay), italics for a standalone one.
+  // MLA has no style for "unknown" — the styling is itself a bibliographic
+  // claim — so a not-yet-classified work renders bare rather than asserting
+  // a kind nobody grounded (Dave's call, 2026-07-16), matching how agents
+  // treat an unknown kind in prose.
   function appendCiteTitle(cite, citation, workType) {
     const punct = /[.!?]$/.test(citation.title) ? "" : ".";
     const yearTail = citation.year ? " " + citation.year + "." : "";
     if (workType === "contained") {
       cite.append(document.createTextNode("“" + citation.title + punct + "”" + yearTail));
-    } else {
+    } else if (workType === "standalone") {
       cite.append(el("i", {}, citation.title));
       cite.append(document.createTextNode(punct + yearTail));
+    } else {
+      cite.append(document.createTextNode(citation.title + punct + yearTail));
     }
   }
   // The inline metadata editor: title, authors, year, full date, and @handle,
