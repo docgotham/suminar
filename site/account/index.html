@@ -585,6 +585,26 @@
       const actions = el("div", { class: "detailactions" });
       const exportBtn = el("button", { class: "ghost", type: "button" }, "Export");
       exportBtn.addEventListener("click", () => exportDoc(doc.documentId, exportsBox, rowStatus));
+      // OCR retry appears only for documents flagged as needing review —
+      // glyph-corrupted fonts or scans. It re-reads the rendered pages via
+      // Mistral OCR, rebuilds the agent, then re-identifies from clean text.
+      const ocrBtn = doc.status === "needs_ocr_review" ? el("button", { class: "ghost", type: "button" }, "Retry with OCR") : null;
+      if (ocrBtn) ocrBtn.addEventListener("click", async () => {
+        rowStatus.className = "status"; rowStatus.textContent = "Running OCR (Mistral) — re-reading the rendered pages; this can take a minute…";
+        ocrBtn.disabled = true;
+        try {
+          const body = await api("/documents/" + encodeURIComponent(doc.documentId) + "/ocr", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          if (body.status && body.status !== "failed") {
+            rowStatus.textContent = "OCR complete. Re-identifying author, title & date from the clean text…";
+            try {
+              await api("/documents/" + encodeURIComponent(doc.documentId) + "/identify", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+            } catch {}
+          }
+          await loadDocs();
+        } catch (error) {
+          rowStatus.className = "status err"; rowStatus.textContent = error.message; ocrBtn.disabled = false;
+        }
+      });
       const reBtn = el("button", { class: "ghost", type: "button" }, "Reprocess");
       reBtn.addEventListener("click", async () => {
         rowStatus.className = "status"; rowStatus.textContent = "Reprocessing — extraction and annotation re-derive…";
@@ -676,9 +696,13 @@
             synBtn.disabled = false;
           }
         });
-        actions.append(exportBtn, draftBtn, synBtn, reBtn, delBtn);
+        actions.append(exportBtn, draftBtn, synBtn);
+        if (ocrBtn) actions.append(ocrBtn);
+        actions.append(reBtn, delBtn);
       } else {
-        actions.append(exportBtn, reBtn, delBtn);
+        actions.append(exportBtn);
+        if (ocrBtn) actions.append(ocrBtn);
+        actions.append(reBtn, delBtn);
       }
       box.append(actions, draftBox, synBox, exportsBox, rowStatus);
       dtd.append(box);

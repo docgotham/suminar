@@ -80,7 +80,7 @@ export class HostedIngestionService {
     return { storageKey, byteSize: buffer.byteLength };
   }
 
-  private async httpExtract(endpoint: string, secret: string, sourceUrl: string, kind: "pdf" | "docx"): Promise<ExtractionResult> {
+  private async httpExtract(endpoint: string, secret: string, sourceUrl: string, kind: "pdf" | "docx", ocr = false): Promise<ExtractionResult> {
     // Bounded below the function's own 300s budget: if extraction grinds, the
     // catch in processDocument must still get to run and record an honest
     // "failed" — an aborted fetch beats a hard-killed function that orphans
@@ -88,7 +88,7 @@ export class HostedIngestionService {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", "x-suminar-extract-secret": secret },
-      body: JSON.stringify({ sourceUrl, kind }),
+      body: JSON.stringify({ sourceUrl, kind, ...(ocr ? { ocr: true } : {}) }),
       signal: AbortSignal.timeout(240_000),
     });
     if (!response.ok) throw new Error(`Extraction function returned ${response.status}: ${(await response.text()).slice(0, 300)}`);
@@ -364,7 +364,7 @@ export class HostedIngestionService {
     }
   }
 
-  async processDocument(documentId: string, options: IngestOptions = {}): Promise<{ agentId: string; status: string }> {
+  async processDocument(documentId: string, options: IngestOptions = {}, ocr = false): Promise<{ agentId: string; status: string }> {
     const doc = await this.client
       .from("documents")
       .select("id, owner, filename, mime, storage_key, status")
@@ -374,6 +374,7 @@ export class HostedIngestionService {
     if (doc.error || !doc.data) throw new Error("Document not found");
     const mime = doc.data.mime as string;
     const kind: "pdf" | "docx" = mime === "application/pdf" ? "pdf" : "docx";
+    const priorStatus = doc.data.status as string;
 
     await this.client.from("documents").update({ status: "processing", failure_detail: null }).eq("owner", this.owner).eq("id", documentId);
     const endpoint = this.extractEndpoint();
@@ -382,13 +383,16 @@ export class HostedIngestionService {
       let result: { agentId: string; extractionStatus: LocalAgentManifest["extractionStatus"] };
       if (endpoint && secret) {
         const te = Date.now();
-        const signed = await this.client.storage.from(this.bucket).createSignedUrl(doc.data.storage_key as string, 300);
+        // OCR sends the source to Mistral (rendered-page reading, longer TTL
+        // for the slower path); the plain extraction URL lives 300s.
+        const signed = await this.client.storage.from(this.bucket).createSignedUrl(doc.data.storage_key as string, ocr ? 900 : 300);
         if (signed.error || !signed.data?.signedUrl) throw new Error(`Signed URL failed: ${signed.error?.message ?? "no url"}`);
-        console.log(`[suminar-timing] ${documentId} extract begin @${Date.now() - te}ms`);
-        const extraction = await this.httpExtract(endpoint, secret, signed.data.signedUrl, kind);
+        console.log(`[suminar-timing] ${documentId} extract begin @${Date.now() - te}ms${ocr ? " (ocr)" : ""}`);
+        const extraction = await this.httpExtract(endpoint, secret, signed.data.signedUrl, kind, ocr);
         console.log(`[suminar-timing] ${documentId} extract returned @${Date.now() - te}ms (${extraction.pageCount}p ${extraction.chunks.length}ch)`);
         result = await this.persistExtraction(documentId, { filename: doc.data.filename as string, storage_key: doc.data.storage_key as string }, extraction, options);
       } else {
+        if (ocr) throw new Error("OCR retry requires the hosted extraction function");
         if (kind !== "pdf") throw new Error("Local fallback ingestion supports PDF only; configure the extraction function for .docx");
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "suminar-src-"));
         const localPath = path.join(tempDir, `${randomUUID()}.pdf`);
@@ -406,7 +410,9 @@ export class HostedIngestionService {
       return { agentId: result.agentId, status };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      await this.client.from("documents").update({ status: "failed", failure_detail: detail }).eq("owner", this.owner).eq("id", documentId);
+      // A failed OCR retry must not mark a previously-working document
+      // "failed": restore its prior status and record the detail.
+      await this.client.from("documents").update({ status: ocr ? priorStatus : "failed", failure_detail: detail }).eq("owner", this.owner).eq("id", documentId);
       throw error;
     }
   }

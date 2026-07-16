@@ -7,9 +7,14 @@ derivative set as JSON, and holds no secrets or database access. The Node
 orchestrator does embeddings, key generation, Storage uploads, and DB rows.
 
 Contract (POST, header x-suminar-extract-secret must equal SUMINAR_EXTRACT_SECRET):
-  request:  { "sourceUrl": "<signed url>", "kind": "pdf" | "docx" }
+  request:  { "sourceUrl": "<signed url>", "kind": "pdf" | "docx", "ocr": bool? }
   response: { agentId, sourceHash, extractionStatus, pageCount, markdown,
               chunks: [{chunkId, agentId, chunkIndex, page, location, text, tokenEstimate}] }
+
+With "ocr": true (PDF only, user-triggered), the text comes from the Mistral
+OCR API reading the rendered pages instead of PyMuPDF reading the embedded
+text layer — the cure for glyph-corrupted fonts (broken ToUnicode maps) and
+scans. Requires MISTRAL_API_KEY; the source travels to Mistral for that call.
 """
 import hashlib
 import json
@@ -17,6 +22,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
@@ -41,6 +47,20 @@ def clean_text(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+# Glyph corruption from a broken ToUnicode font map lands symbols or digits
+# INSIDE words — "Poli)cs", "informa)on", "Honeycu8", "e8orts" — at rates real
+# prose never approaches (every ti/tt/fi ligature in the document breaks the
+# same way). Two letters before the symbol keep ordinary math like f(x) and
+# P(A) out; the digit rule looks only inside lowercase words, so B2B, H1N1,
+# and footnote markers after a word survive.
+SYMBOL_IN_WORD = re.compile(r"[A-Za-z]{2}[()\[\]{}<>|~^][A-Za-z]")
+DIGIT_IN_WORD = re.compile(r"[a-z][0-9][a-z]")
+
+
+def glyph_corruption_hits(text: str) -> int:
+    return len(SYMBOL_IN_WORD.findall(text)) + len(DIGIT_IN_WORD.findall(text))
 
 
 def extract_pdf(data: bytes):
@@ -78,7 +98,59 @@ def extract_pdf(data: bytes):
         status = "partial_needs_ocr_review"
     else:
         status = "clean"
-    return pages, status, {"pageCount": page_count, "emptyPages": empty_pages, "totalChars": total_chars, "errors": errors}
+    report = {"pageCount": page_count, "emptyPages": empty_pages, "totalChars": total_chars, "errors": errors}
+    # Text volume can be fine while every ligature is garbage; flag dense
+    # mid-word corruption for the user-triggered OCR retry rather than
+    # presenting a "ready" agent that quotes "Poli)cs" verbatim.
+    if status == "clean":
+        full_text = "\n".join(pages)
+        hits = glyph_corruption_hits(full_text)
+        words = max(1, len(full_text.split()))
+        report["glyphCorruptionHits"] = hits
+        if hits >= 15 and hits / words >= 0.004:
+            status = "partial_needs_ocr_review"
+            report["glyphCorruption"] = True
+    return pages, status, report
+
+
+# OCR retry: Mistral reads the RENDERED pages, so a broken embedded text
+# layer (bad ToUnicode map, scans) cannot corrupt it. Mirrors the open-kernel
+# ocr-mistral path (scripts/ingest_pdf.py) over plain REST — the signed source
+# URL is handed to Mistral directly, so the bytes never round-trip through
+# this function twice.
+def extract_pdf_ocr(source_url: str):
+    api_key = os.environ.get("MISTRAL_API_KEY")
+    if not api_key:
+        raise ValueError("OCR is not configured on this deployment: MISTRAL_API_KEY is missing")
+    PROGRESS["stage"] = "mistral ocr"
+    payload = json.dumps({
+        "model": "mistral-ocr-latest",
+        "document": {"type": "document_url", "document_url": source_url},
+        "table_format": "markdown",
+        "include_image_base64": False,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.mistral.ai/v1/ocr",
+        data=payload,
+        headers={"content-type": "application/json", "authorization": f"Bearer {api_key}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            result = json.loads(response.read())
+    except urllib.error.HTTPError as exc:  # noqa: PERF203
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise ValueError(f"Mistral OCR returned {exc.code}: {detail}") from exc
+    pages = [clean_text((page.get("markdown") or "")) for page in result.get("pages", [])]
+    total_chars = sum(len(page) for page in pages)
+    status = "clean" if total_chars >= 200 else "needs_ocr"
+    return pages, status, {
+        "pageCount": len(pages),
+        "emptyPages": sum(1 for page in pages if len(page) < 40),
+        "totalChars": total_chars,
+        "ocrModel": "mistral-ocr-latest",
+        "errors": [],
+    }
 
 
 def extract_docx(data: bytes):
@@ -149,7 +221,7 @@ def markdown_document(agent_id: str, status: str, pages) -> str:
     return f"{header}\n{body}\n"
 
 
-def extract_payload(source_url: str, kind: str) -> dict:
+def extract_payload(source_url: str, kind: str, ocr: bool = False) -> dict:
     PROGRESS["stage"] = "downloading source"
     request = urllib.request.Request(source_url, headers={"user-agent": "suminar-extract/1"})
     with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 (signed URL from our own Storage)
@@ -157,9 +229,15 @@ def extract_payload(source_url: str, kind: str) -> dict:
     if len(data) > MAX_BYTES:
         raise ValueError("Source exceeds the 256 MB extraction limit")
 
+    # The bytes are downloaded even for OCR: the agent id is the hash of the
+    # original, and it must land on the same agent the first extraction made.
     source_hash = hashlib.sha256(data).hexdigest()
     agent_id = f"agent_{source_hash[:24]}"
-    if kind == "docx":
+    if ocr:
+        if kind != "pdf":
+            raise ValueError("OCR retry supports PDF sources only")
+        pages, status, report = extract_pdf_ocr(source_url)
+    elif kind == "docx":
         PROGRESS["stage"] = "docx text extraction"
         pages, status, report = extract_docx(data)
     else:
@@ -196,6 +274,7 @@ class handler(BaseHTTPRequestHandler):
             request = json.loads(self.rfile.read(length) or b"{}")
             source_url = request.get("sourceUrl")
             kind = request.get("kind", "pdf")
+            ocr = bool(request.get("ocr"))
             if not isinstance(source_url, str) or kind not in ("pdf", "docx"):
                 self._send(400, {"error": "invalid_request", "detail": "sourceUrl and kind (pdf|docx) are required"})
                 return
@@ -203,7 +282,7 @@ class handler(BaseHTTPRequestHandler):
 
             def run() -> None:
                 try:
-                    holder["result"] = extract_payload(source_url, kind)
+                    holder["result"] = extract_payload(source_url, kind, ocr)
                 except Exception as exc:  # noqa: BLE001
                     holder["error"] = exc
 

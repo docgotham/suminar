@@ -51,7 +51,7 @@ export async function handleHostedDocumentsRequest(request: Request, env: NodeJS
   // POST /documents/upload-url). register() is left ungated: it can only follow
   // a signed URL that was already metered, and re-registering a documentId trips
   // the primary-key guard.
-  const gate = request.method === "POST" && (!documentId || documentId === "upload-url" || ["process", "draft-annotation"].includes(action ?? "")) ? rules.uploadPerAccount
+  const gate = request.method === "POST" && (!documentId || documentId === "upload-url" || ["process", "draft-annotation", "ocr"].includes(action ?? "")) ? rules.uploadPerAccount
     : request.method === "POST" && documentId && action === "identify" ? rules.identifyPerAccount
     : request.method === "POST" && documentId && action === "metadata" ? rules.accountPerOwner
     : request.method === "GET" && documentId && action === "export" ? rules.exportPerAccount
@@ -70,6 +70,7 @@ export async function handleHostedDocumentsRequest(request: Request, env: NodeJS
   if (request.method === "POST" && documentId && action === "process") {
     return processDocument(client, owner, documentId, origin, await request.json().catch(() => ({})) as Record<string, unknown>);
   }
+  if (request.method === "POST" && documentId && action === "ocr") return ocrDocument(client, owner, documentId, origin);
   if (request.method === "POST" && documentId && action === "draft-annotation") return draftAnnotation(client, owner, documentId);
   if (request.method === "POST" && documentId && action === "identify") return identifyDocument(client, owner, documentId);
   if (request.method === "POST" && documentId && action === "metadata") {
@@ -301,6 +302,20 @@ async function processDocument(client: SupabaseClient, owner: string, documentId
   try {
     const ingestion = new HostedIngestionService(client, owner, { extractBaseUrl: origin });
     const result = await ingestion.processDocument(documentId, metadata);
+    return json({ documentId, status: result.status, agentId: result.agentId });
+  } catch (error) {
+    return json({ documentId, status: "failed", error_description: error instanceof Error ? error.message : String(error) }, 400);
+  }
+}
+
+// User-triggered OCR retry: re-extract the document's text from its rendered
+// pages via Mistral OCR — the cure for glyph-corrupted embedded fonts and
+// scans — then rebuild the agent on the clean text. Existing card metadata is
+// preserved (empty options), exactly like a reprocess.
+async function ocrDocument(client: SupabaseClient, owner: string, documentId: string, origin: string): Promise<Response> {
+  try {
+    const ingestion = new HostedIngestionService(client, owner, { extractBaseUrl: origin });
+    const result = await ingestion.processDocument(documentId, {}, true);
     return json({ documentId, status: result.status, agentId: result.agentId });
   } catch (error) {
     return json({ documentId, status: "failed", error_description: error instanceof Error ? error.message : String(error) }, 400);
