@@ -22,6 +22,7 @@ export interface IngestOptions {
   title?: string;
   authors?: string;
   year?: number;
+  publicationDate?: string;
   citation?: string;
   edition?: string;
   doiOrIsbn?: string;

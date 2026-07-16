@@ -1,16 +1,25 @@
 import { z } from "zod";
 import { PROTOCOL_VERSION } from "./types.js";
 
+const metadataOriginSchema = z.enum(["document", "crossref", "web", "manual"]);
+
 export const sourceIdentitySchema = z.object({
   title: z.string().min(1).max(500),
   authors: z.array(z.string().min(1).max(200)).max(100),
   edition: z.string().max(200).optional(),
   doiOrIsbn: z.string().max(200).optional(),
   year: z.number().int().min(1).max(3000).optional(),
+  publicationDate: z.string().max(100).optional(),
   citation: z.string().max(2000).optional(),
   pageCount: z.number().int().positive().optional(),
   annotation: z.string().max(500).optional(),
   annotationSource: z.enum(["supplied", "mined", "composed"]).optional(),
+  metadataProvenance: z.object({
+    title: metadataOriginSchema.optional(),
+    authors: metadataOriginSchema.optional(),
+    year: metadataOriginSchema.optional(),
+    publicationDate: metadataOriginSchema.optional(),
+  }).optional(),
 });
 
 export const userMessagePacketSchema = z.object({

@@ -7,6 +7,7 @@ import { PILOT_LIMITS, isPilotLimitMessage } from "./limits.js";
 import { checkHostedRateLimit, hostedRateLimitRules, rateLimitedResponse } from "./ratelimit.js";
 import { mlaCitationParts } from "../suminar/naming.js";
 import { buildAnnotationDraftPrompt, sampleChunksForDraft } from "../suminar/annotation.js";
+import { deriveMetadata } from "../suminar/metadata.js";
 import { loadConfig } from "../suminar/config.js";
 import OpenAI from "openai";
 
@@ -45,7 +46,8 @@ export async function handleHostedDocumentsRequest(request: Request, env: NodeJS
   // Account-keyed frequency limits on the expensive paths; fail-open (the
   // pilot volume quotas underneath fail closed).
   const rules = hostedRateLimitRules(env);
-  const gate = request.method === "POST" && (!documentId || action === "process" || action === "draft-annotation") ? rules.uploadPerAccount
+  const gate = request.method === "POST" && (!documentId || ["process", "draft-annotation", "identify"].includes(action ?? "")) ? rules.uploadPerAccount
+    : request.method === "POST" && documentId && action === "metadata" ? rules.accountPerOwner
     : request.method === "GET" && documentId && action === "export" ? rules.exportPerAccount
     : null;
   if (gate) {
@@ -61,6 +63,10 @@ export async function handleHostedDocumentsRequest(request: Request, env: NodeJS
     return processDocument(client, owner, documentId, origin, await request.json().catch(() => ({})) as Record<string, unknown>);
   }
   if (request.method === "POST" && documentId && action === "draft-annotation") return draftAnnotation(client, owner, documentId);
+  if (request.method === "POST" && documentId && action === "identify") return identifyDocument(client, owner, documentId);
+  if (request.method === "POST" && documentId && action === "metadata") {
+    return updateMetadata(client, owner, documentId, await request.json().catch(() => ({})) as Record<string, unknown>);
+  }
   if (request.method === "DELETE" && documentId) return deleteDocument(client, owner, documentId);
   return json({ error: "not_found" }, 404);
 }
@@ -77,7 +83,11 @@ async function listDocuments(client: SupabaseClient, owner: string): Promise<Res
     card: {
       handle?: string;
       displayName?: string;
-      sourceIdentity?: { title?: string; authors?: string[]; year?: number; citation?: string; annotation?: string; annotationSource?: string };
+      sourceIdentity?: {
+        title?: string; authors?: string[]; year?: number; publicationDate?: string; citation?: string;
+        annotation?: string; annotationSource?: string;
+        metadataProvenance?: Record<string, string>;
+      };
     };
     extraction_status: string;
   }
@@ -98,6 +108,12 @@ async function listDocuments(client: SupabaseClient, owner: string): Promise<Res
         handle: agent.card?.handle,
         displayName: agent.card?.displayName,
         extractionStatus: agent.extraction_status,
+        // The editable identity fields, for inline correction in the dashboard.
+        title: identity.title ?? "",
+        authors: identity.authors ?? [],
+        year: identity.year ?? null,
+        publicationDate: identity.publicationDate ?? null,
+        metadataProvenance: identity.metadataProvenance ?? {},
         // A verbatim owner-supplied citation supersedes the derived MLA parts.
         citation: identity.citation
           ? { verbatim: identity.citation }
@@ -176,6 +192,7 @@ async function processDocument(client: SupabaseClient, owner: string, documentId
     title: typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined,
     authors: typeof body.authors === "string" && body.authors.trim() ? body.authors.trim() : undefined,
     year: body.year !== undefined && body.year !== null && body.year !== "" ? Number(body.year) : undefined,
+    publicationDate: typeof body.publicationDate === "string" && body.publicationDate.trim() ? body.publicationDate.trim() : undefined,
     handle: typeof body.handle === "string" && body.handle.trim() ? body.handle.trim() : undefined,
     displayName: typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim() : undefined,
     citation: typeof body.citation === "string" && body.citation.trim() ? body.citation.trim() : undefined,
@@ -227,6 +244,87 @@ async function draftAnnotation(client: SupabaseClient, owner: string, documentId
     return json({ documentId, draft });
   } catch (error) {
     return json({ error: "server_error", error_description: error instanceof Error ? error.message : String(error) }, 502);
+  }
+}
+
+// Auto-identify a source's bibliographic metadata and APPLY it (the owner
+// chose auto-apply-then-edit). The derivation reads the document's own front
+// matter first, refines via Crossref on a DOI, and scoped-web-searches only a
+// missing date; fields it cannot ground stay empty, and per-field provenance
+// rides back so the dashboard flags the web-guessed ones. The handle is
+// re-derived from the identified names, upgrading the filename-provisional one.
+async function identifyDocument(client: SupabaseClient, owner: string, documentId: string): Promise<Response> {
+  const agentRow = await client.from("source_agents")
+    .select("agent_id").eq("owner", owner).eq("document_id", documentId).maybeSingle();
+  if (agentRow.error || !agentRow.data) return json({ error: "not_found", error_description: "No source agent exists for this document yet." }, 404);
+  const artifact = await client.from("agent_artifacts")
+    .select("storage_key").eq("agent_id", agentRow.data.agent_id as string).eq("kind", "markdown").maybeSingle();
+  if (artifact.error || !artifact.data) return json({ error: "not_found", error_description: "This agent has no readable text yet." }, 404);
+  const download = await client.storage.from(ARTIFACT_BUCKET).download(artifact.data.storage_key as string);
+  if (download.error || !download.data) return json({ error: "server_error", error_description: "The source text could not be read." }, 500);
+  // The front matter carries the citation; strip the extractor's HTML comments.
+  const frontMatter = (await download.data.text()).replace(/<!--[\s\S]*?-->/g, "").replace(/\n{3,}/g, "\n\n").trim();
+
+  const model = loadConfig().openAiModel;
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  let proposal;
+  try {
+    proposal = await deriveMetadata({ frontMatter, openai, model, allowWeb: true });
+  } catch (error) {
+    return json({ error: "server_error", error_description: error instanceof Error ? error.message : String(error) }, 502);
+  }
+
+  // Only apply fields the derivation actually grounded — never blank an
+  // existing value with a gap.
+  const fields: Parameters<HostedIngestionService["updateAgentMetadata"]>[1] = { rederiveHandle: true, provenance: proposal.provenance };
+  if (proposal.title) fields.title = proposal.title;
+  if (proposal.authors?.length) fields.authors = proposal.authors;
+  if (proposal.year !== undefined) fields.year = proposal.year;
+  if (proposal.publicationDate !== undefined) fields.publicationDate = proposal.publicationDate;
+  try {
+    const ingestion = new HostedIngestionService(client, owner);
+    const applied = await ingestion.updateAgentMetadata(documentId, fields);
+    return json({
+      documentId,
+      handle: applied.handle,
+      displayName: applied.displayName,
+      applied: {
+        title: applied.identity.title,
+        authors: applied.identity.authors,
+        year: applied.identity.year ?? null,
+        publicationDate: applied.identity.publicationDate ?? null,
+      },
+      provenance: proposal.provenance,
+      notes: proposal.notes,
+    });
+  } catch (error) {
+    return json({ error: "server_error", error_description: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+// Inline metadata edit: a lightweight card update, no re-extraction. Every
+// edited field is stamped "manual" provenance so the dashboard stops flagging
+// it. Handles are slugified and uniqueness-checked inside updateAgentMetadata.
+async function updateMetadata(client: SupabaseClient, owner: string, documentId: string, body: Record<string, unknown>): Promise<Response> {
+  const fields: Parameters<HostedIngestionService["updateAgentMetadata"]>[1] = {};
+  const provenance: Record<string, "manual"> = {};
+  if (typeof body.title === "string") { fields.title = body.title; provenance.title = "manual"; }
+  if (Array.isArray(body.authors)) { fields.authors = body.authors.filter((a): a is string => typeof a === "string"); provenance.authors = "manual"; }
+  else if (typeof body.authors === "string") { fields.authors = body.authors.split(/[;|]/).map((a) => a.trim()).filter(Boolean); provenance.authors = "manual"; }
+  if ("year" in body) { fields.year = body.year === null || body.year === "" ? null : Number(body.year); provenance.year = "manual"; }
+  if ("publicationDate" in body) { fields.publicationDate = body.publicationDate == null ? null : String(body.publicationDate); provenance.publicationDate = "manual"; }
+  if (typeof body.handle === "string") fields.handle = body.handle;
+  if (typeof body.citation === "string") fields.citation = body.citation;
+  if (Object.keys(provenance).length) fields.provenance = provenance;
+  if (fields.year !== undefined && fields.year !== null && !Number.isInteger(fields.year)) {
+    return json({ error: "invalid_request", error_description: "Year must be a whole number." }, 400);
+  }
+  try {
+    const ingestion = new HostedIngestionService(client, owner);
+    const result = await ingestion.updateAgentMetadata(documentId, fields);
+    return json({ documentId, handle: result.handle, displayName: result.displayName });
+  } catch (error) {
+    return json({ error: "invalid_request", error_description: error instanceof Error ? error.message : String(error) }, 400);
   }
 }
 

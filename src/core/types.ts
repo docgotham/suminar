@@ -26,12 +26,19 @@ export interface AddressedMessagePacket {
   hostMessageId?: string;
 }
 
+export type MetadataField = "title" | "authors" | "year" | "publicationDate";
+export type MetadataOrigin = "document" | "crossref" | "web" | "manual";
+
 export interface SourceIdentity {
   title: string;
   authors: string[];
   edition?: string;
   doiOrIsbn?: string;
   year?: number;
+  // The fuller publication date for citation display ("2026-03-15", "March
+  // 2026") when it's known — digital magazine articles want it. `year` stays
+  // the handle/disambiguation key; this is display-only.
+  publicationDate?: string;
   citation?: string;
   pageCount?: number;
   // Annotated-bibliography line with its provenance tier: supplied by the
@@ -39,6 +46,10 @@ export interface SourceIdentity {
   // metadata. Never model-generated without review.
   annotation?: string;
   annotationSource?: "supplied" | "mined" | "composed";
+  // Per-field origin of the identified metadata, so the dashboard can flag the
+  // web-guessed fields as worth a glance. "manual" once the owner edits a
+  // field. Absent for legacy/derived-from-filename agents.
+  metadataProvenance?: Partial<Record<MetadataField, MetadataOrigin>>;
 }
 
 export interface RepresentativeCharter {

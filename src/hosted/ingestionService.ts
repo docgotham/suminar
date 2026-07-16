@@ -6,12 +6,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadConfig } from "../suminar/config.js";
 import { IngestionService, buildSourceAgentCard } from "../suminar/ingestion.js";
 import type { IngestOptions } from "../suminar/ingestion.js";
-import { deriveDisplayName, handleCandidates } from "../suminar/naming.js";
+import { deriveDisplayName, handleCandidates, slugifyName } from "../suminar/naming.js";
 import { deriveAnnotation } from "../suminar/annotation.js";
 import { LocalStore } from "../core/storage.js";
 import { digestJson } from "../core/crypto.js";
 import { generateSigningKeyPair } from "../core/crypto.js";
-import type { AgentCard, ChunkRecord, LocalAgentManifest, SourceIdentity } from "../core/types.js";
+import type { AgentCard, ChunkRecord, LocalAgentManifest, MetadataField, MetadataOrigin, SourceIdentity } from "../core/types.js";
 import OpenAI from "openai";
 import type { EmbeddingRecord } from "../suminar/artifacts.js";
 import { ARTIFACT_BUCKET } from "./supabaseArtifacts.js";
@@ -161,6 +161,7 @@ export class HostedIngestionService {
     const edition = options.edition ?? existing?.edition;
     const doiOrIsbn = options.doiOrIsbn ?? existing?.doiOrIsbn;
     const year = options.year ?? existing?.year;
+    const publicationDate = options.publicationDate ?? existing?.publicationDate;
     const citation = options.citation ?? existing?.citation;
     return {
       title,
@@ -168,9 +169,62 @@ export class HostedIngestionService {
       ...(edition ? { edition } : {}),
       ...(doiOrIsbn ? { doiOrIsbn } : {}),
       ...(year ? { year } : {}),
+      ...(publicationDate ? { publicationDate } : {}),
       ...(citation ? { citation } : {}),
       ...(pageCount ? { pageCount } : {}),
+      ...(existing?.metadataProvenance ? { metadataProvenance: existing.metadataProvenance } : {}),
     };
+  }
+
+  // Lightweight metadata edit: rewrite only the agent card's identity, handle,
+  // and display name — no re-extraction, no re-embedding. This is the path for
+  // both auto-identify (applying derived metadata) and inline field edits, so
+  // neither pays the full ingestion cost. The signing key and every other card
+  // field are preserved.
+  async updateAgentMetadata(documentId: string, fields: {
+    title?: string;
+    authors?: string[];
+    year?: number | null;
+    publicationDate?: string | null;
+    citation?: string | null;
+    handle?: string;
+    rederiveHandle?: boolean;
+    provenance?: Partial<Record<MetadataField, MetadataOrigin>>;
+  }): Promise<{ agentId: string; handle: string; displayName: string; identity: SourceIdentity }> {
+    const row = await this.client.from("source_agents")
+      .select("agent_id, card").eq("owner", this.owner).eq("document_id", documentId).maybeSingle();
+    if (row.error || !row.data) throw new Error("No source agent exists for this document yet.");
+    const agentId = row.data.agent_id as string;
+    const card = row.data.card as AgentCard;
+    const identity: SourceIdentity = { ...card.sourceIdentity };
+    if (fields.title !== undefined) identity.title = fields.title.trim() || identity.title;
+    if (fields.authors !== undefined) identity.authors = fields.authors.map((a) => a.trim()).filter(Boolean);
+    if (fields.year !== undefined) { if (fields.year === null) delete identity.year; else identity.year = fields.year; }
+    if (fields.publicationDate !== undefined) { const v = fields.publicationDate?.trim(); if (v) identity.publicationDate = v; else delete identity.publicationDate; }
+    if (fields.citation !== undefined) { const v = fields.citation?.trim(); if (v) identity.citation = v; else delete identity.citation; }
+    if (fields.provenance) identity.metadataProvenance = { ...identity.metadataProvenance, ...fields.provenance };
+
+    const namingIdentity = { authors: identity.authors, title: identity.title, ...(identity.year ? { year: identity.year } : {}) };
+    let handle = card.handle;
+    const explicit = fields.handle?.trim();
+    if (explicit) {
+      const slug = slugifyName(explicit);
+      if (!slug) throw new Error("That handle has no usable characters — try letters and numbers.");
+      if (slug !== card.handle && await this.handleTakenByAnother(slug, agentId)) {
+        throw new Error(`The handle "@${slug}" already belongs to another of your source agents — choose a different one.`);
+      }
+      handle = slug;
+    } else if (fields.rederiveHandle) {
+      handle = await this.firstFreeHandle(handleCandidates(namingIdentity), agentId);
+    }
+    const displayName = deriveDisplayName(namingIdentity);
+
+    const updatedCard: AgentCard = { ...card, handle, displayName, sourceIdentity: identity };
+    const update = await this.client.from("source_agents")
+      .update({ card: updatedCard, card_digest: digestJson(updatedCard) })
+      .eq("owner", this.owner).eq("agent_id", agentId);
+    if (update.error) throw new Error(`Metadata update failed: ${update.error.message}`);
+    return { agentId, handle, displayName, identity };
   }
 
   // Persist an extraction result (from the HTTP function) into Storage + DB.
