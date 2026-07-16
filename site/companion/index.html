@@ -133,6 +133,11 @@
   .toggleline button { font-size: .75rem; }
   #gate { max-width: 26rem; margin: 3rem auto; padding: 0 1rem; }
   #gate p { font-size: .875rem; color: var(--mut); }
+  .updatebar {
+    display: flex; align-items: center; gap: .6rem; justify-content: space-between;
+    font-size: .8125rem; padding: .45rem .6rem; margin: 0 0 .7rem;
+    border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-tint);
+  }
 </style>
 </head>
 <body>
@@ -145,6 +150,10 @@
 </div>
 
 <div class="col" id="main" hidden>
+  <div class="updatebar" id="update-bar" hidden>
+    <span>The companion has been updated.</span>
+    <button id="update-reload" type="button">Reload</button>
+  </div>
   <header>
     <span class="wordmark">Sum<span class="dot">·</span>inar</span>
     <span class="sublabel">companion</span>
@@ -561,11 +570,33 @@
     }
   }
   // A long-lived side window stays fresh without hammering the budgets:
-  // refresh on focus; the home views once a minute, the open record every
+  // refresh on focus AND on becoming visible (a popup can be revealed
+  // without focus); the home views once a minute, the open record every
   // 15s (its reads are delta-fetched and run on their own rate rule).
   window.addEventListener("focus", () => { if (TOKEN) { loadAll(); pollSeminar(); } });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && TOKEN) { loadAll(); pollSeminar(); checkForUpdate(); }
+  });
   setInterval(() => { if (TOKEN && document.visibilityState === "visible") loadAll(); }, 60000);
   setInterval(() => { if (TOKEN && SEM.id && document.visibilityState === "visible") pollSeminar(); }, 15000);
+
+  // This window is designed to stay open all day in a project that deploys
+  // all day — and popups have no reload button. The page's own ETag is its
+  // build fingerprint: when the server's copy changes, offer one click to
+  // pick it up (never auto-reload out from under a mid-copy user).
+  let PAGE_ETAG = null;
+  async function checkForUpdate() {
+    try {
+      const res = await fetch(location.pathname, { method: "HEAD", cache: "no-cache" });
+      const tag = res.headers.get("etag");
+      if (!tag) return;
+      if (PAGE_ETAG === null) { PAGE_ETAG = tag; return; }
+      if (tag !== PAGE_ETAG) $("update-bar").hidden = false;
+    } catch {}
+  }
+  $("update-reload").addEventListener("click", () => location.reload());
+  checkForUpdate();
+  setInterval(checkForUpdate, 300000);
 
   // ---- boot: session token, opener handoff, or the gate ----
   if (TOKEN) { openWith(TOKEN); return; }
