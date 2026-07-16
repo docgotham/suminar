@@ -155,26 +155,35 @@ async function webPublicationDate(
 ): Promise<{ year?: number; publicationDate?: string } | null> {
   const who = authors?.length ? ` by ${authors.slice(0, 3).join(", ")}` : "";
   const where = publication ? ` in ${publication}` : "";
+  const isGpt5 = /^gpt-5(?:-|$)/i.test(model);
   try {
     const response = await openai.responses.create({
       model,
-      tools: [{ type: "web_search_preview" }],
+      tools: [{ type: "web_search" }],
       instructions: [
         "You find the ORIGINAL publication date of one specific known work using web search.",
         "The work's title and author are given; do not identify a different work. Search for that exact work, and report the date it was first published.",
         "If you cannot find a confident date for this specific work, say so. Never guess.",
-        'Return ONLY JSON: {"found": boolean, "year": integer|null, "publicationDate": string|null}. publicationDate is ISO (YYYY-MM-DD) when the full date is known, otherwise the most precise form available.',
+        'After searching, return ONLY a JSON object as your final message: {"found": boolean, "year": integer|null, "publicationDate": string|null}. publicationDate is ISO (YYYY-MM-DD) when the full date is known, otherwise the most precise form available (e.g. "2015-09").',
       ].join(" "),
       input: `Find the original publication date of the work titled "${title}"${who}${where}.`,
-      max_output_tokens: 1_500,
+      // Web search + reasoning both draw on the output budget; give the final
+      // JSON room, and cap reasoning so it does not consume the whole budget.
+      max_output_tokens: 4_000,
       store: false,
-    }, { timeout: 75_000 });
+      ...(isGpt5 ? { reasoning: { effort: "low" as const }, text: { verbosity: "low" as const } } : {}),
+    }, { timeout: 90_000 });
     const parsed = parseJsonLoose(response.output_text ?? "");
-    if (!parsed || parsed.found !== true) return null;
+    if (!parsed) {
+      console.error(`[suminar] webdate: no parseable JSON (status=${response.status}, text=${JSON.stringify((response.output_text ?? "").slice(0, 200))})`);
+      return null;
+    }
+    if (parsed.found !== true) return null;
     const year = cleanYear(parsed.year);
     const publicationDate = cleanString(parsed.publicationDate, 100);
     return year || publicationDate ? { ...(year ? { year } : {}), ...(publicationDate ? { publicationDate } : {}) } : null;
-  } catch {
+  } catch (error) {
+    console.error(`[suminar] webdate search failed: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }
