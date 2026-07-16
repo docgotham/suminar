@@ -121,3 +121,34 @@ suminar.ai (domain attached to the Vercel project; apex canonical).
 - **Transport hardening**: `/mcp` is POST-only — GET/DELETE return 405
   ahead of auth and rate limiting (a 429 on the SSE probe once reconnect-
   stormed a conformant client into reporting the server dead).
+
+## As built — Phase 4 (2026-07-16, auto-identify metadata, 1.0.11 → 1.0.14)
+
+- **Metadata identification** (`src/suminar/metadata.ts` `deriveMetadata`):
+  most-trusted evidence first — gpt-5 extracts title/authors/year/DOI from the
+  document's own front matter (grounded, decoy-rejecting), a Crossref lookup
+  authoritatively refines a DOI'd work, and a scoped web search (GA
+  `web_search` tool, reasoning-effort capped so it does not starve the answer
+  budget) fills only a *missing* date, anchored on the known title/author. Per-
+  field provenance (document / crossref / web / manual); an ungrounded field
+  stays blank, never fabricated. `SourceIdentity` gains `publicationDate`
+  (display date; `year` stays the handle/sort key) and `metadataProvenance`.
+- **Endpoints**: `POST /documents/:id/identify` (derive + auto-apply, re-
+  derives the handle; own `identifyPerAccount` budget) and `POST
+  /documents/:id/metadata` (inline field edit, stamps `manual`, handle
+  slugified + uniqueness-checked). Both route through
+  `HostedIngestionService.updateAgentMetadata` — a card-only rewrite (no re-
+  extraction/re-embedding), the lightweight primitive the full-reprocess path
+  is too heavy for.
+- **Dashboard**: per-source inline editor (title / authors / year / publication
+  date / @handle) with live handle-slug preview and provenance chips; auto-
+  identify default-on per upload; prompt-based Rename retired.
+- **Proven**: clean-room DOI PDF → Crossref-authoritative in ~9s; dateless
+  essay → web date (`2015-08-11`) in ~18s; inline-edit save path 10/10.
+  Regression tests in `tests/metadata.test.ts`.
+- **Known nuance (open for Dave):** `Re-identify` always re-derives the handle,
+  so it overwrites a hand-customized one. Auto-identify (the dominant path) is
+  correct; preserving a manual handle across re-identify would need handle-
+  provenance tracking. **Also pending:** a trust-doc line disclosing that
+  identify sends public bibliographic facts (DOI/title/author) to Crossref and
+  OpenAI web search — no private content leaves, but honesty favors saying so.
