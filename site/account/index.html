@@ -435,6 +435,15 @@
     const authorsI = el("input", { type: "text", value: (a.authors || []).join("; "), placeholder: "Separate multiple authors with ;" });
     const yearI = el("input", { type: "number", min: "1", max: "3000", value: a.year != null ? String(a.year) : "" });
     const dateI = el("input", { type: "text", maxlength: "100", value: a.publicationDate || "", placeholder: "e.g. 2026-03-15 (optional)" });
+    // MLA title styling: italics for a standalone work, quotation marks for a
+    // work inside a larger one. Auto-identify fills this; correct it anytime.
+    const kindI = el("select", {});
+    kindI.append(
+      el("option", { value: "" }, "— not set —"),
+      el("option", { value: "standalone" }, "Standalone work — book, report (italics)"),
+      el("option", { value: "contained" }, "In a larger work — article, essay (“quotes”)"),
+    );
+    kindI.value = a.workType || "";
     const handleI = el("input", { type: "text", value: a.handle || "" });
     const hprev = el("span", { class: "hpreview" });
     const refreshPreview = () => {
@@ -444,7 +453,7 @@
     handleI.addEventListener("input", refreshPreview);
     refreshPreview();
     const yearRow = el("div", { class: "metarow" });
-    yearRow.append(field("Year", yearI, "year"), field("Publication date", dateI, "publicationDate"));
+    yearRow.append(field("Year", yearI, "year"), field("Publication date", dateI, "publicationDate"), field("Work type", kindI, "workType"));
     const handleField = field("@handle (how you address it in chat)", handleI, null);
     handleField.querySelector("label").append(hprev);
 
@@ -456,6 +465,7 @@
         authors: authorsI.value.trim(),
         year: yearI.value.trim() === "" ? null : Number(yearI.value),
         publicationDate: dateI.value.trim() === "" ? null : dateI.value.trim(),
+        workType: kindI.value === "" ? null : kindI.value,
       };
       const h = handleI.value.trim();
       if (h && h !== (a.handle || "")) payload.handle = h;

@@ -92,7 +92,7 @@ async function listDocuments(client: SupabaseClient, owner: string): Promise<Res
       handle?: string;
       displayName?: string;
       sourceIdentity?: {
-        title?: string; authors?: string[]; year?: number; publicationDate?: string; citation?: string;
+        title?: string; authors?: string[]; year?: number; publicationDate?: string; workType?: string; citation?: string;
         annotation?: string; annotationSource?: string;
         metadataProvenance?: Record<string, string>;
       };
@@ -121,6 +121,7 @@ async function listDocuments(client: SupabaseClient, owner: string): Promise<Res
         authors: identity.authors ?? [],
         year: identity.year ?? null,
         publicationDate: identity.publicationDate ?? null,
+        workType: identity.workType ?? null,
         metadataProvenance: identity.metadataProvenance ?? {},
         // A verbatim owner-supplied citation supersedes the derived MLA parts.
         citation: identity.citation
@@ -380,6 +381,7 @@ async function identifyDocument(client: SupabaseClient, owner: string, documentI
   if (proposal.authors?.length) fields.authors = proposal.authors;
   if (proposal.year !== undefined) fields.year = proposal.year;
   if (proposal.publicationDate !== undefined) fields.publicationDate = proposal.publicationDate;
+  if (proposal.workType !== undefined) fields.workType = proposal.workType;
   try {
     const ingestion = new HostedIngestionService(client, owner);
     const applied = await ingestion.updateAgentMetadata(documentId, fields);
@@ -412,6 +414,12 @@ async function updateMetadata(client: SupabaseClient, owner: string, documentId:
   else if (typeof body.authors === "string") { fields.authors = body.authors.split(/[;|]/).map((a) => a.trim()).filter(Boolean); provenance.authors = "manual"; }
   if ("year" in body) { fields.year = body.year === null || body.year === "" ? null : Number(body.year); provenance.year = "manual"; }
   if ("publicationDate" in body) { fields.publicationDate = body.publicationDate == null ? null : String(body.publicationDate); provenance.publicationDate = "manual"; }
+  if ("workType" in body) {
+    const wt = body.workType;
+    if (wt === null || wt === "") { fields.workType = null; provenance.workType = "manual"; }
+    else if (wt === "standalone" || wt === "contained") { fields.workType = wt; provenance.workType = "manual"; }
+    else return json({ error: "invalid_request", error_description: "workType must be \"standalone\" or \"contained\"." }, 400);
+  }
   if (typeof body.handle === "string") fields.handle = body.handle;
   if (typeof body.citation === "string") fields.citation = body.citation;
   if (Object.keys(provenance).length) fields.provenance = provenance;

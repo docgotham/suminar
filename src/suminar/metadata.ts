@@ -14,10 +14,15 @@ export interface MetadataProposal {
   authors?: string[];
   year?: number;
   publicationDate?: string;
+  workType?: "standalone" | "contained";
   doi?: string;
   publication?: string;
   provenance: Partial<Record<MetadataField, MetadataOrigin>>;
   notes: string[];
+}
+
+function cleanWorkType(value: unknown): "standalone" | "contained" | undefined {
+  return value === "standalone" || value === "contained" ? value : undefined;
 }
 
 function parseJsonLoose(text: string): Record<string, unknown> | null {
@@ -95,8 +100,9 @@ const EXTRACTION_INSTRUCTIONS = [
   "Use ONLY what is printed in the provided text. Do not infer from outside knowledge, and do not guess. If a field is not present in the text, return null for it.",
   "authors are the individual people who wrote the work, in natural reading order — exclude 'Corresponding author', emails, affiliations, departments, editors, and translators; null if the work has no personal byline.",
   "corporateAuthor is the organization credited as the author when NO individual person is bylined (e.g. a research brief, report, or white paper authored by an association, institute, or agency). Null if there are personal authors, or if no organization is credited as author (do not put a mere publisher here).",
+  "workType is \"standalone\" when the work is published on its own (a book, monograph, standalone report, or thesis) or \"contained\" when it is published inside a larger container (a journal, magazine, or newspaper article; an essay on a website; a chapter). Judge from what the opening pages show — a journal masthead, volume/issue numbers, or a running container name mean contained; a title page with only a publisher means standalone. Null when the pages do not make it clear.",
   "Return ONLY a JSON object with these keys and no prose:",
-  '{"title": string|null, "authors": string[]|null, "corporateAuthor": string|null, "year": integer|null, "publicationDate": string|null, "doi": string|null, "publication": string|null}',
+  '{"title": string|null, "authors": string[]|null, "corporateAuthor": string|null, "year": integer|null, "publicationDate": string|null, "workType": "standalone"|"contained"|null, "doi": string|null, "publication": string|null}',
   "publicationDate is the full date exactly as printed if one appears (e.g. \"March 15, 2026\"); otherwise null. publication is the journal, magazine, or publisher name if printed.",
 ].join(" ");
 
@@ -134,6 +140,8 @@ async function extractFromDocument(frontMatter: string, openai: OpenAI, model: s
   }
   if (year) { proposal.year = year; proposal.provenance.year = "document"; }
   if (publicationDate) { proposal.publicationDate = publicationDate; proposal.provenance.publicationDate = "document"; }
+  const workType = cleanWorkType(parsed.workType);
+  if (workType) { proposal.workType = workType; proposal.provenance.workType = "document"; }
   if (doi && /10\.\d{4,9}\/\S+/.test(doi)) proposal.doi = doi.match(/10\.\d{4,9}\/\S+/)![0].replace(/[).,;]+$/, "");
   if (publication) proposal.publication = publication;
   return proposal;
@@ -147,7 +155,14 @@ interface CrossrefWork {
   "published-print"?: { "date-parts"?: number[][] };
   "published-online"?: { "date-parts"?: number[][] };
   "container-title"?: string[];
+  type?: string;
 }
+
+// Crossref's work type, mapped onto the MLA styling divide: contained works
+// take quotation marks, standalone works italics. Types outside both sets
+// (dataset, component, …) assert nothing.
+const CROSSREF_CONTAINED = new Set(["journal-article", "proceedings-article", "book-chapter", "book-part", "book-section", "posted-content", "reference-entry"]);
+const CROSSREF_STANDALONE = new Set(["book", "monograph", "edited-book", "reference-book", "report", "dissertation"]);
 
 function formatDateParts(parts?: number[]): { year?: number; date?: string } {
   if (!parts?.length) return {};
@@ -181,6 +196,8 @@ async function crossrefLookup(doi: string): Promise<MetadataProposal | null> {
     const { year, date } = formatDateParts(dp);
     if (year) { proposal.year = year; proposal.provenance.year = "crossref"; }
     if (date && date !== String(year)) { proposal.publicationDate = date; proposal.provenance.publicationDate = "crossref"; }
+    if (work.type && CROSSREF_CONTAINED.has(work.type)) { proposal.workType = "contained"; proposal.provenance.workType = "crossref"; }
+    else if (work.type && CROSSREF_STANDALONE.has(work.type)) { proposal.workType = "standalone"; proposal.provenance.workType = "crossref"; }
     const publication = cleanString(work["container-title"]?.[0], 300);
     if (publication) proposal.publication = publication;
     return proposal;
@@ -251,6 +268,7 @@ export async function deriveMetadata(opts: {
       if (crossref.authors !== undefined) { proposal.authors = crossref.authors; proposal.provenance.authors = "crossref"; }
       if (crossref.year !== undefined) { proposal.year = crossref.year; proposal.provenance.year = "crossref"; }
       if (crossref.publicationDate !== undefined) { proposal.publicationDate = crossref.publicationDate; proposal.provenance.publicationDate = "crossref"; }
+      if (crossref.workType !== undefined) { proposal.workType = crossref.workType; proposal.provenance.workType = "crossref"; }
       if (crossref.publication) proposal.publication = crossref.publication;
     } else {
       proposal.notes.push("A DOI was found but Crossref did not return a record.");

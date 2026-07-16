@@ -10,6 +10,7 @@ export const sourceIdentitySchema = z.object({
   doiOrIsbn: z.string().max(200).optional(),
   year: z.number().int().min(1).max(3000).optional(),
   publicationDate: z.string().max(100).optional(),
+  workType: z.enum(["standalone", "contained"]).optional(),
   citation: z.string().max(2000).optional(),
   pageCount: z.number().int().positive().optional(),
   annotation: z.string().max(500).optional(),
@@ -19,6 +20,7 @@ export const sourceIdentitySchema = z.object({
     authors: metadataOriginSchema.optional(),
     year: metadataOriginSchema.optional(),
     publicationDate: metadataOriginSchema.optional(),
+    workType: metadataOriginSchema.optional(),
   }).optional(),
 });
 

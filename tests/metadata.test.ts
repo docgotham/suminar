@@ -50,6 +50,7 @@ describe("deriveMetadata", () => {
         author: [{ given: "Alan", family: "Turing" }],
         issued: { "date-parts": [[1950, 10]] },
         "container-title": ["Mind"],
+        type: "journal-article",
       },
     }), { status: 200 }));
     const p = await deriveMetadata({ frontMatter: "has a doi", openai, model: "gpt-5", allowWeb: false });
@@ -60,6 +61,32 @@ describe("deriveMetadata", () => {
     expect(p.publicationDate).toBe("1950-10");
     expect(p.provenance.title).toBe("crossref");
     expect(p.provenance.year).toBe("crossref");
+    // Crossref's work type is authoritative for MLA title styling.
+    expect(p.workType).toBe("contained");
+    expect(p.provenance.workType).toBe("crossref");
+  });
+
+  it("reads the work kind from the document and rejects invented kinds", async () => {
+    const essay = await deriveMetadata({
+      frontMatter: "a web essay",
+      openai: stubOpenAI(JSON.stringify({ title: "An Essay", authors: ["A B"], year: 2025, workType: "contained", doi: null })),
+      model: "gpt-5", allowWeb: false,
+    });
+    expect(essay.workType).toBe("contained");
+    expect(essay.provenance.workType).toBe("document");
+    const book = await deriveMetadata({
+      frontMatter: "a title page",
+      openai: stubOpenAI(JSON.stringify({ title: "A Book", authors: ["A B"], year: 1990, workType: "standalone", doi: null })),
+      model: "gpt-5", allowWeb: false,
+    });
+    expect(book.workType).toBe("standalone");
+    const junk = await deriveMetadata({
+      frontMatter: "x",
+      openai: stubOpenAI(JSON.stringify({ title: "T", authors: ["A B"], year: 2000, workType: "pamphlet", doi: null })),
+      model: "gpt-5", allowWeb: false,
+    });
+    expect(junk.workType).toBeUndefined();
+    expect(junk.provenance.workType).toBeUndefined();
   });
 
   it("fills a missing date from a scoped web search, stamped web provenance", async () => {

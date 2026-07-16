@@ -170,6 +170,7 @@ export class HostedIngestionService {
       ...(doiOrIsbn ? { doiOrIsbn } : {}),
       ...(year ? { year } : {}),
       ...(publicationDate ? { publicationDate } : {}),
+      ...(existing?.workType ? { workType: existing.workType } : {}),
       ...(citation ? { citation } : {}),
       ...(pageCount ? { pageCount } : {}),
       ...(existing?.metadataProvenance ? { metadataProvenance: existing.metadataProvenance } : {}),
@@ -186,6 +187,7 @@ export class HostedIngestionService {
     authors?: string[];
     year?: number | null;
     publicationDate?: string | null;
+    workType?: "standalone" | "contained" | null;
     citation?: string | null;
     handle?: string;
     rederiveHandle?: boolean;
@@ -201,6 +203,7 @@ export class HostedIngestionService {
     if (fields.authors !== undefined) identity.authors = fields.authors.map((a) => a.trim()).filter(Boolean);
     if (fields.year !== undefined) { if (fields.year === null) delete identity.year; else identity.year = fields.year; }
     if (fields.publicationDate !== undefined) { const v = fields.publicationDate?.trim(); if (v) identity.publicationDate = v; else delete identity.publicationDate; }
+    if (fields.workType !== undefined) { if (fields.workType === null) delete identity.workType; else identity.workType = fields.workType; }
     if (fields.citation !== undefined) { const v = fields.citation?.trim(); if (v) identity.citation = v; else delete identity.citation; }
     if (fields.provenance) identity.metadataProvenance = { ...identity.metadataProvenance, ...fields.provenance };
 

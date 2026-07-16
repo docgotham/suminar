@@ -26,7 +26,7 @@ export interface AddressedMessagePacket {
   hostMessageId?: string;
 }
 
-export type MetadataField = "title" | "authors" | "year" | "publicationDate";
+export type MetadataField = "title" | "authors" | "year" | "publicationDate" | "workType";
 export type MetadataOrigin = "document" | "crossref" | "web" | "manual";
 
 export interface SourceIdentity {
@@ -39,6 +39,11 @@ export interface SourceIdentity {
   // 2026") when it's known — digital magazine articles want it. `year` stays
   // the handle/disambiguation key; this is display-only.
   publicationDate?: string;
+  // MLA title styling follows what kind of work this is: a standalone work
+  // (book, monograph, standalone report, thesis) is italicized; a contained
+  // work (journal/magazine article, web essay, chapter) takes quotation
+  // marks. Absent when unknown — titles then render unstyled.
+  workType?: "standalone" | "contained";
   citation?: string;
   pageCount?: number;
   // Annotated-bibliography line with its provenance tier: supplied by the
