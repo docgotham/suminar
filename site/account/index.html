@@ -77,6 +77,23 @@
   td.num { font-variant-numeric: tabular-nums; }
   .tablewrap { overflow-x: auto; }
   .pill { display: inline-block; font-size: .71875rem; font-weight: 600; border-radius: 999px; padding: .05rem .55rem; background: var(--accent-tint); color: var(--accent); }
+  /* The handle is what users carry into the host chat: a click-to-copy chip,
+     monospaced so it reads as the literal string they'll paste. */
+  .handlechip {
+    display: inline-block; font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: .78125rem; padding: .12rem .55rem; border: 1px solid var(--line); border-radius: 999px;
+    background: transparent; color: var(--accent-contrast); cursor: copy; text-align: left;
+  }
+  .handlechip:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent-tint) 60%, transparent); }
+  .handlechip.copied { border-color: var(--accent); background: var(--accent-tint); color: var(--accent); }
+  /* Companion-width comfort: the shelf is often a narrow window beside a host
+     chat; keep the four columns breathing instead of forcing a side-scroll. */
+  @media (max-width: 900px) {
+    .citeline { font-size: .8125rem; max-width: 32ch; }
+    th, td { padding-right: .35rem; }
+    td { padding-top: .45rem; padding-bottom: .45rem; }
+    .handlechip { font-size: .71875rem; padding: .1rem .45rem; }
+  }
   .pill.warn { background: transparent; border: 1px solid var(--accent-gold); color: var(--accent-gold); }
   .pill.bad { background: transparent; border: 1px solid var(--err); color: var(--err); }
   .status { font-size: .875rem; min-height: 1.3em; margin: .7rem 0 0; }
@@ -429,6 +446,23 @@
     if (OPEN_DOCS.has(key)) setOpen(true);
     return setOpen;
   }
+  // A handle is what users carry into the host chat many times a session:
+  // render it as a click-to-copy chip. Copies WITH the leading @ (the form an
+  // address must begin with) and never toggles the disclosure row.
+  function handleChip(handle) {
+    const chip = el("button", { class: "handlechip", type: "button", title: "Click to copy @" + handle }, "@" + handle);
+    chip.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await navigator.clipboard.writeText("@" + handle);
+        const prior = chip.textContent;
+        chip.textContent = "✓ copied";
+        chip.classList.add("copied");
+        setTimeout(() => { chip.textContent = prior; chip.classList.remove("copied"); }, 1200);
+      } catch {}
+    });
+    return chip;
+  }
   // The citation line's title, styled per MLA by work type: quotation marks
   // for a contained work (article, essay), italics for a standalone one.
   // MLA has no style for "unknown" — the styling is itself a bibliographic
@@ -496,6 +530,10 @@
     yearRow.append(field("Year", yearI, "year"), field("Publication date", dateI, "publicationDate"), field("Work type", kindI, "workType"));
     const handleField = field("@handle (how you address it in chat)", handleI, null);
     handleField.querySelector("label").append(hprev);
+    if (a.handle) {
+      handleField.querySelector("label").append(document.createTextNode(" "));
+      handleField.querySelector("label").append(handleChip(a.handle));
+    }
 
     const saveBtn = el("button", { type: "button" }, "Save");
     saveBtn.addEventListener("click", async () => {
@@ -563,7 +601,10 @@
       }
       src.append(cite);
       tr.append(src);
-      tr.append(el("td", {}, doc.agent?.handle ? "@" + doc.agent.handle : "—"));
+      const handleTd = el("td");
+      if (doc.agent?.handle) handleTd.append(handleChip(doc.agent.handle));
+      else handleTd.append(document.createTextNode("—"));
+      tr.append(handleTd);
       const st = el("td");
       st.append(el("span", { class: "pill" + (doc.status === "failed" ? " bad" : doc.status === "ready" ? "" : " warn") }, doc.status));
       tr.append(st);
@@ -736,7 +777,9 @@
       }
       src.append(cite);
       tr.append(src);
-      tr.append(el("td", {}, "@" + received.localHandle));
+      const synHandleTd = el("td");
+      synHandleTd.append(handleChip(received.localHandle));
+      tr.append(synHandleTd);
       const st = el("td");
       st.append(el("span", { class: "pill warn" }, "syndicated"));
       tr.append(st);
