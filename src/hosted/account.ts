@@ -94,8 +94,11 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   }
   if (!owner) return json({ error: "unauthorized" }, 401);
 
-  const decision = await checkHostedRateLimit(client, rules.accountPerOwner, owner);
-  if (!decision.allowed) return withCors(rateLimitedResponse(decision, "account"));
+  // Companion reads poll; they run on their own generous budget so the
+  // account-operation allowance stays for operations.
+  const gateRule = request.method === "GET" && resource === "seminars" ? rules.seminarsPerAccount : rules.accountPerOwner;
+  const decision = await checkHostedRateLimit(client, gateRule, owner);
+  if (!decision.allowed) return withCors(rateLimitedResponse(decision, gateRule.name));
 
   if (request.method === "GET" && resource === "tokens" && !id) return listTokens(client, owner);
   if (request.method === "POST" && resource === "tokens" && !id) return mintToken(client, owner, body ?? {});
@@ -105,6 +108,7 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   if (request.method === "POST" && resource === "invites" && id && action === "revoke") return revokeInvite(client, owner, id);
   if (request.method === "GET" && resource === "usage" && !id) return usage(client, owner);
   if (request.method === "GET" && resource === "seminars" && !id) return listSeminars(client, owner);
+  if (request.method === "GET" && resource === "seminars" && id && !action) return seminarDetail(client, owner, id, new URL(request.url).searchParams);
   if (request.method === "POST" && resource === "seminars" && id && action === "title") return renameSeminar(client, owner, id, body ?? {});
   if (resource === "syndications") {
     const sub = segments[5];
@@ -125,6 +129,57 @@ async function listSeminars(client: SupabaseClient, owner: string): Promise<Resp
   const { data, error } = await client.rpc("list_seminars", { p_owner: owner });
   if (error) return json({ error: "server_error", error_description: error.message }, 500);
   return json({ seminars: data ?? [] });
+}
+
+// One seminar's canonical record: meta, participants, and the visible event
+// stream — delta-fetched (?after=<sequence>) so the live view polls cheaply.
+// The conversation token resolves server-side and never leaves; the response
+// carries text and speakers only, not envelopes, hashes, or ids beyond the
+// seminar's own public one.
+async function seminarDetail(client: SupabaseClient, owner: string, seminarId: string, params: URLSearchParams): Promise<Response> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seminarId)) {
+    return json({ error: "invalid_request", error_description: "A valid seminar id is required." }, 400);
+  }
+  const after = Math.max(0, Number.parseInt(params.get("after") ?? "0", 10) || 0);
+  const conv = await client.from("conversations")
+    .select("token, id, title, created_at, updated_at, last_sequence")
+    .eq("owner", owner).eq("id", seminarId).maybeSingle();
+  if (conv.error) return json({ error: "server_error", error_description: conv.error.message }, 500);
+  if (!conv.data) return json({ error: "not_found" }, 404);
+  const token = conv.data.token as string;
+
+  const [agents, events] = await Promise.all([
+    client.from("conversation_agents")
+      .select("agent_ref").eq("conversation_token", token).order("created_at", { ascending: true }),
+    client.from("conversation_events")
+      .select("sequence, created_at, speakerType:event->>speakerType, speakerDisplayName:event->>speakerDisplayName, agentId:event->>speakerAgentId, text:event->>authoredMessage")
+      .eq("conversation_token", token)
+      .gt("sequence", after)
+      .order("sequence", { ascending: true })
+      .limit(500),
+  ]);
+  if (agents.error) return json({ error: "server_error", error_description: agents.error.message }, 500);
+  if (events.error) return json({ error: "server_error", error_description: events.error.message }, 500);
+
+  return json({
+    seminarId,
+    title: conv.data.title ?? null,
+    createdAt: conv.data.created_at,
+    updatedAt: conv.data.updated_at,
+    lastSequence: conv.data.last_sequence ?? 0,
+    participants: (agents.data ?? []).map((row) => {
+      const ref = row.agent_ref as { handle?: string; displayName?: string; agentId?: string };
+      return { handle: ref.handle ?? "", displayName: ref.displayName ?? "", agentId: ref.agentId ?? "" };
+    }),
+    events: (events.data ?? []).map((row: Record<string, unknown>) => ({
+      sequence: row.sequence,
+      at: row.created_at,
+      speakerType: row.speakerType,
+      speakerDisplayName: row.speakerDisplayName ?? null,
+      agentId: row.agentId ?? null,
+      text: row.text ?? "",
+    })),
+  });
 }
 
 // Rename a seminar: explicit wins, the standing rule. An empty title clears

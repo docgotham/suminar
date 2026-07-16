@@ -95,7 +95,26 @@
   .livestriptitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .livestripchips { margin-top: .3rem; display: flex; flex-wrap: wrap; gap: .3rem .35rem; }
   .livestripchips .handlechip { margin-top: 0; }
-  .sem { padding: .55rem 0; border-bottom: 1px solid var(--line); }
+  .sem { padding: .55rem 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .sem:hover { background: color-mix(in srgb, var(--accent-tint) 40%, transparent); }
+  /* The seminar page: header, chip strip, and the record. */
+  .seminarhead { display: flex; align-items: center; gap: .45rem; margin: .2rem 0 .5rem; min-width: 0; }
+  .backbtn { background: none; border: none; color: var(--accent); font-size: 1.05rem; cursor: pointer; padding: .1rem .35rem; }
+  .backbtn:hover { background: none; color: var(--accent-deep); }
+  .seminartitle { font-weight: 700; font-size: .9375rem; flex: 1 1 auto; min-width: 0; }
+  .seminartitle.derived { font-weight: 400; font-style: italic; }
+  .semchips { display: flex; flex-wrap: wrap; gap: .3rem .35rem; margin: 0 0 .8rem; }
+  .semchips .handlechip { margin-top: 0; }
+  .turn { padding: .55rem 0 .55rem .6rem; border-bottom: 1px solid var(--line); }
+  .turn.source_agent { background: color-mix(in srgb, var(--accent-tint) 35%, transparent); border-left: 3px solid var(--accent); border-radius: 4px; margin: .3rem 0; }
+  .turnhead { display: flex; align-items: baseline; gap: .5rem; font-size: .71875rem; color: var(--mut); min-width: 0; }
+  .turnbadge { font-weight: 700; color: var(--accent-contrast); font-size: .8125rem; }
+  .turnwho { font-weight: 600; }
+  .turnat { margin-left: auto; flex: 0 0 auto; }
+  .turnbody { font-size: .8438rem; line-height: 1.55; overflow-wrap: break-word; }
+  .turnbody p { margin: .35rem 0; }
+  .turnbody ul { margin: .35rem 0; padding-left: 1.15rem; }
+  .turn .handlechip { margin-top: 0; font-size: .6875rem; padding: .05rem .4rem; }
   .sem .titleline { display: flex; align-items: baseline; gap: .5rem; }
   .sem .title { font-size: .875rem; font-weight: 600; flex: 1 1 auto; min-width: 0; }
   .sem .title.derived { font-weight: 400; font-style: italic; }
@@ -128,7 +147,7 @@
     <a class="acct" href="/account/" target="_blank" rel="noopener">account ↗</a>
   </header>
 
-  <div class="tabs" role="tablist">
+  <div class="tabs" role="tablist" id="tabs">
     <button id="tab-shelf" class="tab active" type="button">Shelf</button>
     <button id="tab-seminars" class="tab" type="button">Seminars<span id="tab-live-dot" class="tablive" hidden></span></button>
   </div>
@@ -147,6 +166,22 @@
   <section id="pane-seminars" hidden>
     <div id="seminars"></div>
     <div class="toggleline"><button class="ghost" id="show-all" hidden>Show conversations without agent turns</button></div>
+  </section>
+
+  <!-- The seminar page: the canonical record, live. This is where a seminar
+       is managed — its title is renamed here, its participants ride as chips
+       in the header, and every source-agent turn renders exactly as authored
+       regardless of what the host chat did to it. -->
+  <section id="pane-seminar" hidden>
+    <div class="seminarhead">
+      <button class="backbtn" id="sem-back" type="button" title="Back to the companion">←</button>
+      <span class="seminartitle" id="sem-title"></span>
+      <span class="live" id="sem-live" hidden>live</span>
+      <button class="renamebtn" id="sem-rename" type="button" title="Rename seminar">✎</button>
+    </div>
+    <div class="semchips" id="sem-chips"></div>
+    <div id="sem-record"></div>
+    <p class="status" id="sem-status" role="status"></p>
   </section>
 </div>
 
@@ -185,6 +220,7 @@
     $("gate").hidden = true;
     $("main").hidden = false;
     loadAll();
+    route();
   }
   $("gate-open").addEventListener("click", () => {
     const token = $("gate-token").value.trim();
@@ -268,13 +304,14 @@
   setTab(bootTab);
 
   // ---- seminars ----
-  function derivedTitle(seminar) {
-    const line = (seminar.firstUserLine || "").replace(/\s+/g, " ").trim();
-    if (!line) return "Seminar";
-    if (line.length <= 64) return line;
-    const cut = line.slice(0, 64);
+  function trimTitle(line) {
+    const clean = (line || "").replace(/\s+/g, " ").trim();
+    if (!clean) return "Seminar";
+    if (clean.length <= 64) return clean;
+    const cut = clean.slice(0, 64);
     return (cut.slice(0, cut.lastIndexOf(" ")) || cut).trim() + "…";
   }
+  function derivedTitle(seminar) { return trimTitle(seminar.firstUserLine); }
   function fmtDay(iso) {
     try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }); } catch { return ""; }
   }
@@ -293,28 +330,10 @@
       const title = el("span", { class: "title" + (named ? "" : " derived") }, seminar.title || derivedTitle(seminar));
       titleline.append(title);
       if (now - Date.parse(seminar.updatedAt) < 180000) { titleline.append(el("span", { class: "live" }, "live")); anyLive = true; }
-      const rename = el("button", { class: "renamebtn", type: "button", title: "Rename seminar" }, "✎");
-      rename.addEventListener("click", () => {
-        const input = el("input", { type: "text", maxlength: "200", value: seminar.title || "" });
-        input.placeholder = derivedTitle(seminar);
-        const save = el("button", { type: "button", style: "margin-left:.4rem" }, "Save");
-        save.addEventListener("click", async () => {
-          try {
-            await api("/api/account/seminars/" + encodeURIComponent(seminar.seminarId) + "/title", {
-              method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ title: input.value.trim() }),
-            });
-            await loadAll();
-          } catch (error) { $("pal-status").textContent = error.message; $("pal-status").className = "status err"; }
-        });
-        input.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
-        const editline = el("div", { style: "display:flex; margin:.2rem 0 .1rem" });
-        editline.append(input, save);
-        titleline.replaceWith(editline);
-        input.focus();
-      });
-      titleline.append(rename);
       box.append(titleline);
+      // The home list is pure navigation; the seminar page is where a
+      // seminar is managed (renamed, read, exported).
+      box.addEventListener("click", () => { location.hash = "#sem=" + seminar.seminarId; });
       const who = (seminar.participants || []).map((p) => "@" + p.handle).join("  ");
       box.append(el("div", { class: "meta" },
         fmtDay(seminar.createdAt) + " · " + seminar.agentTurns + " agent turn" + (seminar.agentTurns === 1 ? "" : "s") + (who ? " · " + who : "")));
@@ -339,7 +358,9 @@
       const box = el("div", { class: "livestrip" });
       const head = el("div", { class: "livestriphead" });
       head.append(el("span", { class: "live" }, "live"));
-      head.append(el("span", { class: "livestriptitle" }, seminar.title || derivedTitle(seminar)));
+      const stripTitle = el("span", { class: "livestriptitle", style: "cursor:pointer", title: "Open the record" }, seminar.title || derivedTitle(seminar));
+      stripTitle.addEventListener("click", () => { location.hash = "#sem=" + seminar.seminarId; });
+      head.append(stripTitle);
       box.append(head);
       const chips = el("div", { class: "livestripchips" });
       for (const participant of seminar.participants || []) chips.append(handleChip(participant.handle));
@@ -348,6 +369,154 @@
     }
     strip.hidden = live.length === 0;
   }
+
+  // ---- the seminar page: the canonical record, live ----
+  // Every source-agent turn renders exactly as authored, straight from the
+  // room's own record — host display quirks (orphaned answers, stripped
+  // badges, mangled markdown) never touch it.
+  const SEM = { id: null, lastSeq: 0, firstUserText: "", meta: null };
+  function fmtTime(iso) {
+    try { return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); } catch { return ""; }
+  }
+  // Minimal, safe rendering of authored markdown: paragraphs, bullets,
+  // **bold** and _italic_ spans. Built from DOM nodes — never innerHTML.
+  function appendSpans(node, text) {
+    const parts = String(text).split(/(\*\*[^*\n]+\*\*|(?<![\w])_[^_\n]+_(?![\w]))/g);
+    for (const part of parts) {
+      if (!part) continue;
+      if (/^\*\*[^*\n]+\*\*$/.test(part)) node.append(el("b", {}, part.slice(2, -2)));
+      else if (/^_[^_\n]+_$/.test(part)) node.append(el("i", {}, part.slice(1, -1)));
+      else node.append(document.createTextNode(part));
+    }
+  }
+  function renderRich(target, text) {
+    for (const block of String(text || "").split(/\n{2,}/)) {
+      const lines = block.split("\n").filter((line) => line.trim());
+      if (!lines.length) continue;
+      if (lines.every((line) => /^\s*[*•-]\s+/.test(line))) {
+        const list = el("ul");
+        for (const line of lines) {
+          const item = el("li");
+          appendSpans(item, line.replace(/^\s*[*•-]\s+/, ""));
+          list.append(item);
+        }
+        target.append(list);
+      } else {
+        const para = el("p");
+        lines.forEach((line, index) => {
+          if (index) para.append(el("br"));
+          appendSpans(para, line);
+        });
+        target.append(para);
+      }
+    }
+  }
+  function turnNode(ev, handleByAgentId) {
+    const wrap = el("div", { class: "turn " + (ev.speakerType || "") });
+    const head = el("div", { class: "turnhead" });
+    if (ev.speakerType === "source_agent") {
+      head.append(el("span", { class: "turnbadge" }, "📄 " + (ev.speakerDisplayName || "Source agent")));
+      const handle = handleByAgentId.get(ev.agentId);
+      if (handle) head.append(handleChip(handle));
+    } else {
+      head.append(el("span", { class: "turnwho" }, ev.speakerType === "user" ? "You" : (ev.speakerDisplayName || "Host")));
+    }
+    head.append(el("span", { class: "turnat" }, fmtTime(ev.at)));
+    wrap.append(head);
+    const body = el("div", { class: "turnbody" });
+    renderRich(body, ev.text);
+    wrap.append(body);
+    return wrap;
+  }
+  function updateSeminarTitle() {
+    const named = Boolean(SEM.meta && SEM.meta.title);
+    const titleEl = $("sem-title");
+    if (!titleEl) return;
+    titleEl.textContent = named ? SEM.meta.title : trimTitle(SEM.firstUserText);
+    titleEl.classList.toggle("derived", !named);
+  }
+  async function pollSeminar() {
+    if (!SEM.id) return;
+    const requested = SEM.id;
+    try {
+      const body = await api("/api/account/seminars/" + encodeURIComponent(requested) + "?after=" + SEM.lastSeq);
+      if (SEM.id !== requested || body.seminarId !== requested) return;
+      const record = $("sem-record");
+      const nearBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 240;
+      const handleByAgentId = new Map((body.participants || []).map((p) => [p.agentId, p.handle]));
+      for (const ev of body.events || []) {
+        if (!SEM.firstUserText && ev.speakerType === "user") SEM.firstUserText = ev.text || "";
+        record.append(turnNode(ev, handleByAgentId));
+        SEM.lastSeq = Math.max(SEM.lastSeq, ev.sequence || 0);
+      }
+      SEM.meta = body;
+      updateSeminarTitle();
+      $("sem-live").hidden = !(Date.now() - Date.parse(body.updatedAt) < 180000);
+      const chips = $("sem-chips");
+      chips.replaceChildren();
+      for (const participant of body.participants || []) {
+        if (participant.handle) chips.append(handleChip(participant.handle));
+      }
+      $("sem-status").textContent = SEM.lastSeq === 0 ? "No visible turns in this seminar yet." : "";
+      $("sem-status").className = "status";
+      if ((body.events || []).length && nearBottom) window.scrollTo(0, document.body.scrollHeight);
+    } catch (error) {
+      if (error.message !== "unauthorized") { $("sem-status").textContent = error.message; $("sem-status").className = "status err"; }
+    }
+  }
+  function openSeminar(id) {
+    if (SEM.id === id) return;
+    SEM.id = id; SEM.lastSeq = 0; SEM.firstUserText = ""; SEM.meta = null;
+    $("sem-record").replaceChildren();
+    $("sem-title").textContent = "…";
+    $("sem-title").classList.remove("derived");
+    $("sem-chips").replaceChildren();
+    $("sem-live").hidden = true;
+    $("sem-status").textContent = "";
+    $("tabs").hidden = true;
+    $("pane-shelf").hidden = true;
+    $("pane-seminars").hidden = true;
+    $("pane-seminar").hidden = false;
+    pollSeminar();
+  }
+  function closeSeminar() {
+    SEM.id = null;
+    $("pane-seminar").hidden = true;
+    $("tabs").hidden = false;
+    let tab = "shelf";
+    try { tab = sessionStorage.getItem("suminar_companion_tab") || "shelf"; } catch {}
+    setTab(tab);
+  }
+  $("sem-back").addEventListener("click", () => { location.hash = ""; });
+  $("sem-rename").addEventListener("click", () => {
+    if (!SEM.id) return;
+    const titleEl = $("sem-title");
+    const input = el("input", { type: "text", maxlength: "200", value: (SEM.meta && SEM.meta.title) || "" });
+    input.placeholder = trimTitle(SEM.firstUserText);
+    const save = el("button", { type: "button", style: "margin-left:.4rem; flex:0 0 auto" }, "Save");
+    const editline = el("div", { style: "display:flex; flex:1 1 auto; min-width:0; align-items:center" });
+    save.addEventListener("click", async () => {
+      try {
+        const res = await api("/api/account/seminars/" + encodeURIComponent(SEM.id) + "/title", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: input.value.trim() }),
+        });
+        if (SEM.meta) SEM.meta.title = res.title;
+        editline.replaceWith(titleEl);
+        updateSeminarTitle();
+      } catch (error) { $("sem-status").textContent = error.message; $("sem-status").className = "status err"; }
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
+    editline.append(input, save);
+    titleEl.replaceWith(editline);
+    input.focus();
+  });
+  function route() {
+    const match = location.hash.match(/^#sem=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+    if (match && TOKEN) openSeminar(match[1].toLowerCase());
+    else closeSeminar();
+  }
+  window.addEventListener("hashchange", route);
 
   // ---- load + refresh ----
   async function loadAll() {
@@ -375,10 +544,12 @@
       if (error.message !== "unauthorized") { $("pal-status").textContent = error.message; $("pal-status").className = "status err"; }
     }
   }
-  // A long-lived side window stays fresh without hammering the account
-  // budget: refresh on focus, and once a minute while visible.
-  window.addEventListener("focus", () => { if (TOKEN) loadAll(); });
+  // A long-lived side window stays fresh without hammering the budgets:
+  // refresh on focus; the home views once a minute, the open record every
+  // 15s (its reads are delta-fetched and run on their own rate rule).
+  window.addEventListener("focus", () => { if (TOKEN) { loadAll(); pollSeminar(); } });
   setInterval(() => { if (TOKEN && document.visibilityState === "visible") loadAll(); }, 60000);
+  setInterval(() => { if (TOKEN && SEM.id && document.visibilityState === "visible") pollSeminar(); }, 15000);
 
   // ---- boot: session token, opener handoff, or the gate ----
   if (TOKEN) { openWith(TOKEN); return; }

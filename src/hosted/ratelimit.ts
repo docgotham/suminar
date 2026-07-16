@@ -99,6 +99,14 @@ export function hostedRateLimitRules(env: NodeJS.ProcessEnv = process.env) {
       maxHits: envInt(env, "SUMINAR_RATE_ACCOUNT_PER_HOUR", 120),
       windowSeconds: 3600,
     },
+    // Companion reads: the seminar record polls every ~15s while a seminar
+    // page is visible, plus the home list each minute — cheap owner-scoped
+    // selects that must not eat the account-operation budget.
+    seminarsPerAccount: {
+      name: "seminars",
+      maxHits: envInt(env, "SUMINAR_RATE_SEMINARS_PER_HOUR", 600),
+      windowSeconds: 3600,
+    },
   } satisfies Record<string, RateLimitRule>;
 }
 

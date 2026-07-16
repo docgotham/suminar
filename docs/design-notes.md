@@ -96,17 +96,19 @@ page gains "Companion ↗" (window.open) and hands the session token to the
 companion over same-origin postMessage — credentials never ride URLs.
 Refresh: on focus + 60s while visible (stays inside accountPerOwner budget).
 
-**Increment 2 (open):** the seminar page — click a seminar → its canonical
-record, live-updating: every source-agent turn exactly as authored (badge,
-styled titles, citations), healing host-side display lossiness (orphaned
-answers, stripped badges). **Header = title + rename + participant chip
-strip** (Dave, 2026-07-16): the page carries its own people as copy chips in
-the header and needs no palette of its own — the full shelf stays one tab
-away. **Renaming lives here**: the record view is where a seminar is managed;
-the companion-home list becomes pure navigation and its interim ✎ relocates
-here. Needs an owner-scoped events read (seminar id → ordered canonical
-turns; tokens stay server-side). Later rungs: per-seminar works-cited export,
-provenance/signature panel, markdown transcript export.
+**Increment 2 (SHIPPED, 1.0.34):** the seminar page — click a seminar (home
+row or live-strip title) → `#sem=<id>` → its canonical record, live: every
+source-agent turn exactly as authored (📄 badge + handle chip per turn;
+minimal safe markdown rendering — paragraphs, bullets, bold, italics — built
+from DOM nodes, never innerHTML), user/host turns labeled, timestamps.
+Header = title + rename (✎ relocated here; home list is pure navigation) +
+participant chip strip; the full shelf stays one tab away. Reads:
+`GET /api/account/seminars/:id?after=<seq>` — delta-fetched (poll 15s while
+visible + on focus), tokens resolve server-side and never leave, envelopes/
+hashes not shipped to the client; runs on its own rate rule
+(`seminarsPerAccount`, 600/hr default, SUMINAR_RATE_SEMINARS_PER_HOUR) so
+polling never eats the account-operation budget. Later rungs: per-seminar
+works-cited export, provenance/signature panel, markdown transcript export.
 
 **The live strip (shipped 1.0.33):** "current seminar" is not a selection —
 liveness IS the signal. While a seminar's record is growing (updated within
