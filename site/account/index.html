@@ -722,28 +722,51 @@
       await Promise.all([loadDocs(), loadUsage()]);
     } catch (error) { setStatus("up-status", error.message, true); }
   }
+  const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const UPLOAD_SIZE_CAP = 52428800; // 50 MB — the hosted per-file storage ceiling.
+
   $("upload").addEventListener("submit", async (e) => {
     e.preventDefault();
     const file = $("up-file").files[0];
     if (!file) { setStatus("up-status", "Choose a file first — the file selection may have been lost if the page reloaded.", true); return; }
-    // Uploads currently stream through the API function, which the platform
-    // caps at ~4.5 MB. Catch it here with a clear message instead of a silent
-    // 413 (direct-to-Storage upload for large files is coming).
-    if (file.size > 4300000) {
-      setStatus("up-status", "This file is " + (file.size / 1048576).toFixed(1) + " MB. Uploads are currently limited to about 4 MB — support for larger files is on the way. For now you can compress or split the PDF.", true);
+    // The file uploads straight to storage via a signed URL, so the ceiling is
+    // the per-file storage limit — not the function's ~4.5 MB request body.
+    if (file.size > UPLOAD_SIZE_CAP) {
+      setStatus("up-status", "This file is " + (file.size / 1048576).toFixed(1) + " MB. The per-file limit is 50 MB — compress or split the PDF and try again.", true);
       return;
     }
-    const form = new FormData();
-    form.set("file", file);
-    if ($("up-title").value.trim()) form.set("title", $("up-title").value.trim());
-    if ($("up-authors").value.trim()) form.set("authors", $("up-authors").value.trim());
-    if ($("up-year").value) form.set("year", $("up-year").value);
-    if ($("up-citation").value.trim()) form.set("citation", $("up-citation").value.trim());
-    if ($("up-annotation").value.trim()) form.set("annotation", $("up-annotation").value.trim());
+    const isDocx = /\.docx$/i.test(file.name) || file.type === DOCX_MIME;
+    const mime = isDocx ? DOCX_MIME : "application/pdf";
     $("up-go").disabled = true;
-    setStatus("up-status", "Uploading and building the agent — extraction and embeddings can take a minute…");
     try {
-      const body = await api("/documents", { method: "POST", body: form });
+      // 1. Ask the server for a one-time signed upload URL.
+      setStatus("up-status", "Preparing the upload…");
+      const sign = await api("/documents/upload-url", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ filename: file.name, mime: mime, size: file.size }) });
+      // 2. Upload the file directly to storage — mirrors supabase-js
+      //    uploadToSignedUrl: a PUT with a multipart body and the token already
+      //    in the URL, so no Supabase credentials ride in the browser.
+      setStatus("up-status", "Uploading " + (file.size / 1048576).toFixed(1) + " MB to storage…");
+      const fd = new FormData();
+      fd.append("cacheControl", "3600");
+      fd.append("", file);
+      const put = await fetch(sign.uploadUrl, { method: "PUT", body: fd, headers: { "x-upsert": "false" } });
+      if (!put.ok) {
+        const detail = await put.text().catch(() => "");
+        if (put.status === 413 || /exceeded|maximum|too large/i.test(detail)) {
+          throw new Error("Storage rejected this file (" + (file.size / 1048576).toFixed(1) + " MB) as too large. Compress or split the PDF and try again.");
+        }
+        throw new Error("The upload to storage failed (HTTP " + put.status + ")" + (detail ? ": " + detail.slice(0, 160) : "") + ".");
+      }
+      // 3. Register the landed file, which records it and builds the agent.
+      setStatus("up-status", "Building the agent — extraction and embeddings can take a minute…");
+      const meta = { documentId: sign.documentId, mime: mime, filename: file.name };
+      if ($("up-title").value.trim()) meta.title = $("up-title").value.trim();
+      if ($("up-authors").value.trim()) meta.authors = $("up-authors").value.trim();
+      if ($("up-year").value) meta.year = $("up-year").value;
+      if ($("up-citation").value.trim()) meta.citation = $("up-citation").value.trim();
+      if ($("up-annotation").value.trim()) meta.annotation = $("up-annotation").value.trim();
+      const body = await api("/documents/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(meta) });
+      // 4. Auto-identify (unchanged).
       if (body.documentId && body.status !== "failed" && $("up-identify").checked) {
         setStatus("up-status", "Agent built. Identifying author, title & date — reading the file and checking Crossref…");
         try {

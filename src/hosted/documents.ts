@@ -46,7 +46,12 @@ export async function handleHostedDocumentsRequest(request: Request, env: NodeJS
   // Account-keyed frequency limits on the expensive paths; fail-open (the
   // pilot volume quotas underneath fail closed).
   const rules = hostedRateLimitRules(env);
-  const gate = request.method === "POST" && (!documentId || ["process", "draft-annotation"].includes(action ?? "")) ? rules.uploadPerAccount
+  // One upload spends one uploadPerAccount token, whether it streams through
+  // the function (POST /documents) or goes direct-to-Storage (the signing step,
+  // POST /documents/upload-url). register() is left ungated: it can only follow
+  // a signed URL that was already metered, and re-registering a documentId trips
+  // the primary-key guard.
+  const gate = request.method === "POST" && (!documentId || documentId === "upload-url" || ["process", "draft-annotation"].includes(action ?? "")) ? rules.uploadPerAccount
     : request.method === "POST" && documentId && action === "identify" ? rules.identifyPerAccount
     : request.method === "POST" && documentId && action === "metadata" ? rules.accountPerOwner
     : request.method === "GET" && documentId && action === "export" ? rules.exportPerAccount
@@ -60,6 +65,8 @@ export async function handleHostedDocumentsRequest(request: Request, env: NodeJS
   if (request.method === "GET" && !documentId) return listDocuments(client, owner);
   if (request.method === "GET" && documentId && action === "export") return exportDocument(client, owner, documentId);
   if (request.method === "POST" && !documentId) return uploadDocument(request, client, owner, origin);
+  if (request.method === "POST" && documentId === "upload-url" && !action) return createUploadUrl(request, client, owner);
+  if (request.method === "POST" && documentId === "register" && !action) return registerDocument(request, client, owner, origin);
   if (request.method === "POST" && documentId && action === "process") {
     return processDocument(client, owner, documentId, origin, await request.json().catch(() => ({})) as Record<string, unknown>);
   }
@@ -174,6 +181,97 @@ async function uploadDocument(request: Request, client: SupabaseClient, owner: s
   // Inline processing for the pilot; a queue is a later refinement. The
   // extraction function handles both kinds (PyMuPDF for PDF, python-docx
   // for .docx); the local pypdf fallback remains PDF-only.
+  try {
+    const ingestion = new HostedIngestionService(client, owner, { extractBaseUrl: origin });
+    const result = await ingestion.processDocument(documentId, metadata);
+    return json({ documentId, status: result.status, agentId: result.agentId }, 201);
+  } catch (error) {
+    return json({ documentId, status: "failed", error_description: error instanceof Error ? error.message : String(error) }, 201);
+  }
+}
+
+function extForMime(mime: string): "pdf" | "docx" { return mime === DOCX_MIME ? "docx" : "pdf"; }
+
+// Direct-to-Storage upload, step one: mint a one-time signed URL the browser
+// PUTs the original straight to Storage with — bypassing the ~4.5 MB Vercel
+// function request-body limit that a through-function upload hits. No documents
+// row is written yet; register() records the file once it has actually landed.
+async function createUploadUrl(request: Request, client: SupabaseClient, owner: string): Promise<Response> {
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const mime = typeof body.mime === "string" && body.mime ? body.mime : PDF_MIME;
+  if (mime !== PDF_MIME && mime !== DOCX_MIME) return json({ error: "unsupported_media_type", error_description: "Upload a PDF or .docx file" }, 415);
+  const size = typeof body.size === "number" ? body.size : undefined;
+  if (size !== undefined && size > MAX_UPLOAD_BYTES) {
+    return json({ error: "invalid_request", error_description: `File exceeds the ${Math.floor(MAX_UPLOAD_BYTES / 1_048_576)} MB per-file limit` }, 400);
+  }
+  const documentId = randomUUID();
+  const storageKey = `${owner}/originals/${documentId}.${extForMime(mime)}`;
+  const signed = await client.storage.from(ARTIFACT_BUCKET).createSignedUploadUrl(storageKey);
+  if (signed.error || !signed.data) return json({ error: "server_error", error_description: `Could not create an upload URL: ${signed.error?.message ?? "unknown"}` }, 500);
+  return json({ documentId, mime, uploadUrl: signed.data.signedUrl, token: signed.data.token }, 201);
+}
+
+// Direct-to-Storage upload, step two: record a file the browser uploaded
+// directly, then build its source agent. The storage key is re-derived from the
+// owner + documentId (never trusted from the client, so one owner can't register
+// another's object), the object is downloaded once to establish an authoritative
+// byte size + content hash and confirm it actually landed, and the remainder is
+// the same insert-then-process path a through-function upload runs.
+async function registerDocument(request: Request, client: SupabaseClient, owner: string, origin: string): Promise<Response> {
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const documentId = typeof body.documentId === "string" ? body.documentId.trim() : "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(documentId)) {
+    return json({ error: "invalid_request", error_description: "A valid documentId is required" }, 400);
+  }
+  const mime = typeof body.mime === "string" && body.mime ? body.mime : PDF_MIME;
+  if (mime !== PDF_MIME && mime !== DOCX_MIME) return json({ error: "unsupported_media_type", error_description: "Upload a PDF or .docx file" }, 415);
+  const ext = extForMime(mime);
+  const storageKey = `${owner}/originals/${documentId}.${ext}`;
+
+  const download = await client.storage.from(ARTIFACT_BUCKET).download(storageKey);
+  if (download.error || !download.data) {
+    return json({ error: "invalid_request", error_description: "We couldn't find your uploaded file yet — it may not have finished uploading. Please try the upload again." }, 400);
+  }
+  const bytes = Buffer.from(await download.data.arrayBuffer());
+  if (bytes.byteLength <= 0) {
+    await client.storage.from(ARTIFACT_BUCKET).remove([storageKey]);
+    return json({ error: "invalid_request", error_description: "The uploaded file was empty." }, 400);
+  }
+
+  const insert = await client.from("documents").insert({
+    id: documentId,
+    owner,
+    filename: (typeof body.filename === "string" && body.filename.trim()) ? body.filename.trim() : `document.${ext}`,
+    mime,
+    byte_size: bytes.byteLength,
+    content_sha256: createHash("sha256").update(bytes).digest("hex"),
+    storage_key: storageKey,
+    status: "uploaded",
+  }).select("id, status").single();
+  if (insert.error) {
+    if (/duplicate key/i.test(insert.error.message)) {
+      return json({ error: "conflict", error_description: "This upload was already registered." }, 409);
+    }
+    // The object is orphaned without its row — remove it so a rejected upload
+    // leaves no residue against the storage quota.
+    await client.storage.from(ARTIFACT_BUCKET).remove([storageKey]);
+    if (isPilotLimitMessage(insert.error.message)) return json({ error: "pilot_limit", error_description: insert.error.message }, 400);
+    return json({ error: "server_error", error_description: `Record failed: ${insert.error.message}` }, 500);
+  }
+
+  const metadata = {
+    title: (typeof body.title === "string" && body.title.trim()) ? body.title.trim() : undefined,
+    authors: (typeof body.authors === "string" && body.authors.trim()) ? body.authors.trim() : undefined,
+    year: body.year !== undefined && body.year !== null && body.year !== "" ? Number(body.year) : undefined,
+    handle: (typeof body.handle === "string" && body.handle.trim()) ? body.handle.trim() : undefined,
+    displayName: (typeof body.displayName === "string" && body.displayName.trim()) ? body.displayName.trim() : undefined,
+    citation: (typeof body.citation === "string" && body.citation.trim()) ? body.citation.trim() : undefined,
+    annotation: (typeof body.annotation === "string" && body.annotation.trim()) ? body.annotation.trim() : undefined,
+  };
+
+  // Inline processing, mirroring the through-function upload; a queue is a later
+  // refinement. The original already sits in Storage, so this only extracts,
+  // embeds, and writes the owner-scoped rows.
   try {
     const ingestion = new HostedIngestionService(client, owner, { extractBaseUrl: origin });
     const result = await ingestion.processDocument(documentId, metadata);
