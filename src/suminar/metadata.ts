@@ -38,6 +38,23 @@ function cleanString(value: unknown, max = 500): string | undefined {
   return trimmed && trimmed.toLowerCase() !== "null" && trimmed.toLowerCase() !== "unknown" ? trimmed.slice(0, max) : undefined;
 }
 
+const TITLE_MINOR_WORDS = new Set(["a", "an", "the", "and", "but", "or", "nor", "of", "to", "in", "on", "at", "by", "for", "as", "from", "with", "vs"]);
+
+// Front matter often prints a title in ALL CAPS; title-case it for display.
+// Only touches genuinely all-caps titles — a title with any lowercase letter
+// is left exactly as the source wrote it.
+export function normalizeTitleCase(title: string): string {
+  if (/\p{Ll}/u.test(title)) return title;
+  const words = title.toLowerCase().split(/\s+/).filter(Boolean);
+  return words
+    .map((word, index) => {
+      const bare = word.replace(/[^\p{L}\p{N}]/gu, "");
+      if (index !== 0 && index !== words.length - 1 && TITLE_MINOR_WORDS.has(bare)) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
 function cleanAuthors(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const authors = value
@@ -77,7 +94,8 @@ async function extractFromDocument(frontMatter: string, openai: OpenAI, model: s
     proposal.notes.push("Could not read metadata from the document's opening pages.");
     return proposal;
   }
-  const title = cleanString(parsed.title);
+  const rawTitle = cleanString(parsed.title);
+  const title = rawTitle ? normalizeTitleCase(rawTitle) : undefined;
   const authors = cleanAuthors(parsed.authors);
   const year = cleanYear(parsed.year);
   const publicationDate = cleanString(parsed.publicationDate, 100);

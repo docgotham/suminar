@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { deriveMetadata } from "../src/suminar/metadata.js";
+import { deriveMetadata, normalizeTitleCase } from "../src/suminar/metadata.js";
 import type OpenAI from "openai";
 
 // A stub OpenAI whose responses.create returns canned output_text in order:
@@ -93,6 +93,21 @@ describe("deriveMetadata", () => {
     expect(p.provenance.year).toBe("document");
     // No DOI and a known year → neither Crossref nor web search should run.
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("title-cases an all-caps document title but leaves mixed-case titles alone", () => {
+    expect(normalizeTitleCase("POLITICAL PARTY AFFILIATION AMONG ACADEMIC FACULTY"))
+      .toBe("Political Party Affiliation Among Academic Faculty");
+    expect(normalizeTitleCase("THE SHAPE OF THE RIVER")).toBe("The Shape of the River");
+    // Already mixed-case — untouched, verbatim.
+    expect(normalizeTitleCase("The College Campus and the Culture War")).toBe("The College Campus and the Culture War");
+    expect(normalizeTitleCase("eBay and the Long Tail")).toBe("eBay and the Long Tail");
+  });
+
+  it("applies title-case normalization to a document-extracted all-caps title", async () => {
+    const openai = stubOpenAI(JSON.stringify({ title: "AN ALL CAPS REPORT ON THINGS", authors: ["A B"], year: 2020, doi: null }));
+    const p = await deriveMetadata({ frontMatter: "x", openai, model: "gpt-5", allowWeb: false });
+    expect(p.title).toBe("An All Caps Report on Things");
   });
 
   it("tolerates code-fenced JSON from the model", async () => {
