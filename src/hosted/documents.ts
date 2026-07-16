@@ -139,7 +139,7 @@ async function uploadDocument(request: Request, client: SupabaseClient, owner: s
   try { form = await request.formData(); } catch { return json({ error: "invalid_request", error_description: "Expected multipart/form-data" }, 400); }
   const file = form.get("file");
   if (!(file instanceof File)) return json({ error: "invalid_request", error_description: "A file field is required" }, 400);
-  if (file.size <= 0 || file.size > MAX_UPLOAD_BYTES) return json({ error: "invalid_request", error_description: "File must be between 1 byte and 256 MB" }, 400);
+  if (file.size <= 0 || file.size > MAX_UPLOAD_BYTES) return json({ error: "invalid_request", error_description: `File must be between 1 byte and ${Math.floor(MAX_UPLOAD_BYTES / 1_048_576)} MB` }, 400);
   const mime = file.type || PDF_MIME;
   if (mime !== PDF_MIME && mime !== DOCX_MIME) return json({ error: "unsupported_media_type", error_description: "Upload a PDF or .docx file" }, 415);
 

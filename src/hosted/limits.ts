@@ -8,7 +8,7 @@ export const PILOT_LIMITS = {
   invocationsPerAccountPerMonth: 2000,
   storageBytesPerAccount: 1_073_741_824,
   documentsPerAccount: 50,
-  uploadMaxBytes: 268_435_456,
+  uploadMaxBytes: 52_428_800,
   activeInviteCodesPerIssuer: 10,
   waitlistMaxEntries: 10_000,
   activeSyndicationCodesPerGrantor: 10,

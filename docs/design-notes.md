@@ -6,42 +6,41 @@ the reasoning survives across sessions and tools. Implementation of an entry
 should end with its removal from this file (the code and AGENTS.md become
 the record).
 
-## Bulk ingestion + the direct-to-Storage upload architecture (RESEARCHED, options for Dave — not yet approved)
+## Bulk ingestion — multiple-file orchestration on the direct-to-Storage substrate (Layer 1 SHIPPED; bulk NOT yet built)
 
 **Prompt:** Dave wants to consider letting someone upload many PDFs at once.
-Research done 2026-07-16 while he was out; this records findings + a
-recommendation, pending his decision.
+Researched 2026-07-16; **Layer 1 (the direct-to-Storage single-file path)
+shipped 2026-07-16 (v1.0.18)**. Layer 2 (the bulk UX on top) remains an open,
+Dave-pending design — recorded here so the reasoning survives.
 
-**The finding that reframes the whole thing.** Vercel serverless functions
-have a ~4.5 MB request-body limit. The current upload streams file bytes
-*through* `api/documents.js` (`request.formData()` → `arrayBuffer()`), so the
-advertised "256 MiB per upload" (`limits.ts uploadMaxBytes`, and the site copy
-in `site/index.html` + `site/account/index.html`) is **false**: a 6.2 MiB PDF
-returns `413 FUNCTION_PAYLOAD_TOO_LARGE` at the platform edge, before the code's
-own 256 MiB check runs (verified live against a throwaway). Today's 2 MB PDFs
-work only because they're under 4.5 MB. **This is a latent bug worth fixing
-regardless of bulk** — either correct the claim, or (better) remove the limit
-by changing the upload path.
+**Layer 1 — direct-to-Storage upload — SHIPPED (v1.0.18).** The through-function
+upload (`POST /documents`) capped at Vercel's ~4.5 MB request body, so large
+PDFs `413 FUNCTION_PAYLOAD_TOO_LARGE`'d at the edge before our code ran (the old
+"256 MiB per upload" claim was false — nothing over ~4.5 MB uploaded at all).
+As built:
+- `POST /documents/upload-url` mints a Supabase signed upload URL (owner-scoped
+  storage key; no `documents` row yet; metered under `uploadPerAccount`).
+- Browser PUTs the file **direct to Storage** (multipart body, token in the URL,
+  no Supabase credentials in the client), bypassing the function body limit.
+- `POST /documents/register` re-derives the key from owner+documentId (never
+  trusts the client, so one owner can't register another's object), downloads
+  the object once for an authoritative `byte_size` + `content_sha256` and to
+  confirm it landed, inserts the row, then runs the same extract/embed/persist
+  path; `/identify` runs after, unchanged. Ungated (only follows a metered
+  signed URL; a re-register trips the primary-key guard). A rejected insert
+  removes the object so nothing orphans against the storage quota.
+- **Real per-file ceiling is now 50 MiB** — the `artifacts` bucket's object-size
+  limit (verified live 2026-07-16: 46.7 MiB accepted, 52.5 MiB rejected with
+  "object exceeded the maximum allowed size"). `uploadMaxBytes`, the trust doc,
+  and the site copy were corrected 256 MiB → 50 MiB. Raising it later means
+  bumping the bucket's `file_size_limit` (dashboard/API) AND watching the
+  register download's memory (it pulls the whole object into the function to
+  hash). The `20260715220000_upload_ceiling_50mib.sql` migration lowers the DB
+  trigger cap to match; apply it in prod when convenient (the bucket binds
+  first, so behavior is already correct).
+- The old through-function `POST /documents` stays for small files / API clients.
 
-**The insight: the right way to build bulk is also the fix for large files —
-move uploads OFF the function and DIRECT to Supabase Storage.** supabase-js
-2.110 has `createSignedUploadUrl` / `uploadToSignedUrl` (confirmed present);
-`content_sha256` is only stored, never used for dedup, so the server no longer
-needs to see the bytes.
-
-**Layer 1 — direct-to-Storage upload (fixes large files AND is the substrate for bulk):**
-- `POST /documents/upload-url` → returns a Supabase signed upload URL + storage
-  key for a filename/mime (validates mime; no bytes through the function).
-- Client uploads bytes **browser → Supabase Storage** via `uploadToSignedUrl`,
-  bypassing the 4.5 MB limit (up to Storage's own, far larger, ceiling).
-- `POST /documents/register` → `{ storageKey, filename, mime, metadata? }`
-  creates the `documents` row (hash lazily or drop it) and kicks
-  `processDocument` (extract + embed) exactly as today; `/identify` then runs
-  per source as now.
-- Independently shippable for the *single*-file path first: fixes the large-PDF
-  bug with no UX change, and makes the 256 MiB claim true.
-
-**Layer 2 — bulk orchestration on top:**
+**Layer 2 — bulk orchestration on top (NOT built; Dave-pending):**
 - **Option B (client-orchestrated, bounded concurrency) — RECOMMENDED FIRST.**
   `<input multiple>` / drag-many → per file: get-url → direct-upload → register
   → identify, ~3 concurrent. Per-file progress (queued → uploading → building →
@@ -62,10 +61,11 @@ needs to see the bytes.
   client iterating, and concurrency cuts wall-clock ~3×. No 300 s risk (each
   register+process is a single file).
 
-**Recommended sequence:** (1) ship Layer 1 direct-to-Storage for single upload —
-fixes the large-file bug, corrects the 256 MiB claim, no UX change; (2) add the
-multiple-file client orchestration (Layer 2 Option B) on top; (3) defer the
-durable queue until a real user needs to close the tab mid-batch.
+**Recommended sequence:** (1) ✅ DONE — Layer 1 direct-to-Storage for single
+upload (v1.0.18): fixed the large-file bug, corrected the ceiling to the real
+50 MiB, no UX change; (2) add the multiple-file client orchestration (Layer 2
+Option B) on top; (3) defer the durable queue until a real user needs to close
+the tab mid-batch.
 
 ## Host over-deliberation: terrain fixes, never disposition fixes
 

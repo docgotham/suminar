@@ -31,7 +31,7 @@ triggers), so no application path can skip them:
 | Source-agent invocations per 30 days | 2000 |
 | Documents per account | 50 |
 | Uploaded sources per account | 1 GiB (1073741824 bytes) |
-| Single upload ceiling | 256 MiB (268435456 bytes) |
+| Single upload ceiling | 50 MiB (52428800 bytes) |
 | Active invite codes per account | 10 |
 | Waitlist size | 10000 |
 | Active syndication codes per account | 10 |
