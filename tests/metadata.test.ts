@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { deriveMetadata, normalizeTitleCase } from "../src/suminar/metadata.js";
+import { deriveMetadata, normalizeNameCase, normalizeTitleCase } from "../src/suminar/metadata.js";
 import type OpenAI from "openai";
 
 // A stub OpenAI whose responses.create returns canned output_text in order:
@@ -108,6 +108,29 @@ describe("deriveMetadata", () => {
     const openai = stubOpenAI(JSON.stringify({ title: "AN ALL CAPS REPORT ON THINGS", authors: ["A B"], year: 2020, doi: null }));
     const p = await deriveMetadata({ frontMatter: "x", openai, model: "gpt-5", allowWeb: false });
     expect(p.title).toBe("An All Caps Report on Things");
+  });
+
+  it("title-cases all-caps bylines but respects deliberate casing", () => {
+    // The exact byline Dave hit: an all-caps journal author list.
+    expect(normalizeNameCase("DAVID ROZADO")).toBe("David Rozado");
+    expect(normalizeNameCase("SHIRI SPITZ SIDDIQI")).toBe("Shiri Spitz Siddiqi");
+    expect(normalizeNameCase("DYLAN SELTERMAN")).toBe("Dylan Selterman");
+    // Initials stay upper; hyphens and apostrophes lift their next letter.
+    expect(normalizeNameCase("W.E.B. DU BOIS")).toBe("W.E.B. Du Bois");
+    expect(normalizeNameCase("SPITZ-SIDDIQI")).toBe("Spitz-Siddiqi");
+    expect(normalizeNameCase("SANDRA O'BRIEN")).toBe("Sandra O'Brien");
+    // Any lowercase letter means the casing was chosen — leave it verbatim.
+    expect(normalizeNameCase("danah boyd")).toBe("danah boyd");
+    expect(normalizeNameCase("David Rozado")).toBe("David Rozado");
+  });
+
+  it("normalizes an all-caps author list extracted from the document", async () => {
+    const openai = stubOpenAI(JSON.stringify({
+      title: "The Ideological Divide", authors: ["DAVID ROZADO", "SHIRI SPITZ SIDDIQI", "ERIN SHAW", "DYLAN SELTERMAN"],
+      year: 2024, doi: null,
+    }));
+    const p = await deriveMetadata({ frontMatter: "byline in caps", openai, model: "gpt-5", allowWeb: false });
+    expect(p.authors).toEqual(["David Rozado", "Shiri Spitz Siddiqi", "Erin Shaw", "Dylan Selterman"]);
   });
 
   it("uses the corporate author when a work has no personal byline", async () => {

@@ -55,13 +55,33 @@ export function normalizeTitleCase(title: string): string {
     .join(" ");
 }
 
+// A single name token, already lowercased: capitalize it for display, keeping
+// initials in caps ("j.r.r." -> "J.R.R.", "w.e.b." -> "W.E.B.") and lifting the
+// first letter after a hyphen or apostrophe ("spitz-siddiqi" -> "Spitz-Siddiqi",
+// "o'brien" -> "O'Brien").
+function titleCaseNameWord(word: string): string {
+  if (/^(?:\p{L}\.)+$/u.test(word) || /^\p{L}$/u.test(word)) return word.toUpperCase();
+  return word.replace(/(^|[-'’])(\p{L})/gu, (_m, sep: string, ch: string) => sep + ch.toUpperCase());
+}
+
+// Bylines are often printed in ALL CAPS (DAVID ROZADO; SHIRI SPITZ SIDDIQI).
+// Title-case a personal name for display — but only when it is genuinely all
+// caps; any lowercase letter means the casing was deliberate (e.g. "danah boyd")
+// and is left exactly as written. Personal names only — organizations keep their
+// acronyms (RAND, NASA), so corporate authors never pass through here.
+export function normalizeNameCase(name: string): string {
+  if (/\p{Ll}/u.test(name)) return name;
+  return name.toLowerCase().split(/\s+/).filter(Boolean).map(titleCaseNameWord).join(" ");
+}
+
 function cleanAuthors(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const authors = value
     .map((entry) => cleanString(entry, 200))
     .filter((entry): entry is string => Boolean(entry))
     // Guard against the front-matter junk that isn't a person's name.
-    .filter((entry) => !/@|https?:|\bemail\b|corresponding author|department|university|©/i.test(entry));
+    .filter((entry) => !/@|https?:|\bemail\b|corresponding author|department|university|©/i.test(entry))
+    .map(normalizeNameCase);
   return authors.length ? authors.slice(0, 100) : undefined;
 }
 
