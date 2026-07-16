@@ -148,7 +148,7 @@ async function seminarDetail(client: SupabaseClient, owner: string, seminarId: s
   if (!conv.data) return json({ error: "not_found" }, 404);
   const token = conv.data.token as string;
 
-  const [agents, events] = await Promise.all([
+  const [agents, events, lastEvent] = await Promise.all([
     client.from("conversation_agents")
       .select("agent_ref").eq("conversation_token", token).order("created_at", { ascending: true }),
     client.from("conversation_events")
@@ -157,6 +157,12 @@ async function seminarDetail(client: SupabaseClient, owner: string, seminarId: s
       .gt("sequence", after)
       .order("sequence", { ascending: true })
       .limit(500),
+    client.from("conversation_events")
+      .select("created_at")
+      .eq("conversation_token", token)
+      .order("sequence", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
   if (agents.error) return json({ error: "server_error", error_description: agents.error.message }, 500);
   if (events.error) return json({ error: "server_error", error_description: events.error.message }, 500);
@@ -166,6 +172,8 @@ async function seminarDetail(client: SupabaseClient, owner: string, seminarId: s
     title: conv.data.title ?? null,
     createdAt: conv.data.created_at,
     updatedAt: conv.data.updated_at,
+    // Liveness is event time, not row time: renames must not read as "live".
+    lastEventAt: lastEvent.data?.created_at ?? conv.data.created_at,
     lastSequence: conv.data.last_sequence ?? 0,
     participants: (agents.data ?? []).map((row) => {
       const ref = row.agent_ref as { handle?: string; displayName?: string; agentId?: string };

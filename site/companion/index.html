@@ -95,6 +95,10 @@
   .livestriptitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .livestripchips { margin-top: .3rem; display: flex; flex-wrap: wrap; gap: .3rem .35rem; }
   .livestripchips .handlechip { margin-top: 0; }
+  .openedpill {
+    display: inline-block; font-size: .65625rem; font-weight: 700; letter-spacing: .06em;
+    color: var(--mut); border: 1px solid var(--line); border-radius: 999px; padding: 0 .45rem;
+  }
   .sem { padding: .55rem 0; border-bottom: 1px solid var(--line); cursor: pointer; }
   .sem:hover { background: color-mix(in srgb, var(--accent-tint) 40%, transparent); }
   /* The seminar page: header, chip strip, and the record. */
@@ -329,7 +333,7 @@
       const named = Boolean(seminar.title);
       const title = el("span", { class: "title" + (named ? "" : " derived") }, seminar.title || derivedTitle(seminar));
       titleline.append(title);
-      if (now - Date.parse(seminar.updatedAt) < 180000) { titleline.append(el("span", { class: "live" }, "live")); anyLive = true; }
+      if (now - Date.parse(seminar.lastEventAt || seminar.updatedAt) < 180000) { titleline.append(el("span", { class: "live" }, "live")); anyLive = true; }
       box.append(titleline);
       // The home list is pure navigation; the seminar page is where a
       // seminar is managed (renamed, read, exported).
@@ -345,29 +349,38 @@
   }
   $("show-all").addEventListener("click", () => { SHOW_ALL = true; loadAll(); });
 
-  // The current seminar needs no selection: liveness IS the signal. While a
-  // record is growing, that seminar's participants pin to the top of the
-  // shelf as copy chips, labeled with its name; quiet seminars pin nothing.
+  // The current seminar has two visible-cause signals, never a hidden one:
+  // liveness (its record grew within ~3 min, by event time) pins it labeled
+  // "live", and deliberately opening a record pins that seminar labeled
+  // "opened" until another is opened. Quiet, unopened seminars pin nothing.
   function renderLiveStrip(seminars) {
     const strip = $("live-strip");
     strip.replaceChildren();
     const now = Date.now();
-    const live = seminars.filter((seminar) =>
-      now - Date.parse(seminar.updatedAt) < 180000 && (seminar.participants || []).length);
-    for (const seminar of live.slice(0, 2)) {
+    const isLive = (seminar) => now - Date.parse(seminar.lastEventAt || seminar.updatedAt) < 180000;
+    const pinned = seminars
+      .filter((seminar) => isLive(seminar) && (seminar.participants || []).length)
+      .map((seminar) => ({ seminar, label: "live" }));
+    let lastOpened = null;
+    try { lastOpened = sessionStorage.getItem("suminar_last_seminar"); } catch {}
+    if (lastOpened && !pinned.some((pin) => pin.seminar.seminarId === lastOpened)) {
+      const opened = seminars.find((seminar) => seminar.seminarId === lastOpened);
+      if (opened && (opened.participants || []).length) pinned.push({ seminar: opened, label: "opened" });
+    }
+    for (const pin of pinned.slice(0, 3)) {
       const box = el("div", { class: "livestrip" });
       const head = el("div", { class: "livestriphead" });
-      head.append(el("span", { class: "live" }, "live"));
-      const stripTitle = el("span", { class: "livestriptitle", style: "cursor:pointer", title: "Open the record" }, seminar.title || derivedTitle(seminar));
-      stripTitle.addEventListener("click", () => { location.hash = "#sem=" + seminar.seminarId; });
+      head.append(el("span", { class: pin.label === "live" ? "live" : "openedpill" }, pin.label));
+      const stripTitle = el("span", { class: "livestriptitle", style: "cursor:pointer", title: "Open the record" }, pin.seminar.title || derivedTitle(pin.seminar));
+      stripTitle.addEventListener("click", () => { location.hash = "#sem=" + pin.seminar.seminarId; });
       head.append(stripTitle);
       box.append(head);
       const chips = el("div", { class: "livestripchips" });
-      for (const participant of seminar.participants || []) chips.append(handleChip(participant.handle));
+      for (const participant of pin.seminar.participants || []) chips.append(handleChip(participant.handle));
       box.append(chips);
       strip.append(box);
     }
-    strip.hidden = live.length === 0;
+    strip.hidden = pinned.length === 0;
   }
 
   // ---- the seminar page: the canonical record, live ----
@@ -451,7 +464,7 @@
       }
       SEM.meta = body;
       updateSeminarTitle();
-      $("sem-live").hidden = !(Date.now() - Date.parse(body.updatedAt) < 180000);
+      $("sem-live").hidden = !(Date.now() - Date.parse(body.lastEventAt || body.updatedAt) < 180000);
       const chips = $("sem-chips");
       chips.replaceChildren();
       for (const participant of body.participants || []) {
@@ -466,6 +479,9 @@
   }
   function openSeminar(id) {
     if (SEM.id === id) return;
+    // Opening a record is a visible act of intent: this seminar pins to the
+    // shelf's strip (labeled "opened") until another record is opened.
+    try { sessionStorage.setItem("suminar_last_seminar", id); } catch {}
     SEM.id = id; SEM.lastSeq = 0; SEM.firstUserText = ""; SEM.meta = null;
     $("sem-record").replaceChildren();
     $("sem-title").textContent = "…";
