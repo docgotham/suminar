@@ -77,10 +77,41 @@ describe("handle candidates", () => {
   });
 
   it("degrades gracefully without authors, and never to nothing", () => {
-    expect(handleCandidates({ authors: [], title: "shape-river-foreword" })[0]).toBe("shape-river-foreword");
+    // A space-less filename slug is split on its hyphens into real words.
+    const slug = handleCandidates({ authors: [], title: "shape-river-foreword" });
+    expect(slug[0]).toBe("shape-river");
+    expect(slug).toContain("shape-river-foreword");
     const empty = handleCandidates({ authors: [], title: "" });
     expect(empty[0]).toBe("source");
     expect(empty[1]).toBe("source-2");
+  });
+
+  it("terminates and stays bounded on a metadata-less filename-slug upload", () => {
+    // The exact shape that hung ingestion to the 300s function kill: no
+    // authors + a long hyphen-slug title that truncates to slugifyName's
+    // 100-char cap. handleCandidates must return quickly, bounded, distinct.
+    const identity = {
+      authors: [],
+      title: "the-college-campus-and-the-culture-war-the-development-of-party-polarization-on-higher-education-1980-2025",
+      year: 2026,
+    };
+    const start = Date.now();
+    const candidates = handleCandidates(identity);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.length).toBeLessThanOrEqual(12);
+    expect(new Set(candidates).size).toBe(candidates.length);
+    expect(candidates.every((c) => c.length > 0 && c.length <= 100)).toBe(true);
+    expect(candidates[0]).toBe("college-campus");
+  });
+
+  it("always terminates even on a single over-long title token with no separators", () => {
+    // Defense in depth: a pathological one-word title (no spaces, no hyphens)
+    // still yields a bounded list rather than spinning the disambiguation loop.
+    const candidates = handleCandidates({ authors: [], title: "a".repeat(400), year: 2026 });
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.length).toBeLessThanOrEqual(12);
+    expect(new Set(candidates).size).toBe(candidates.length);
   });
 });
 

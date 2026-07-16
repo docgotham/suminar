@@ -50,11 +50,16 @@ function naturalOrderSurname(author: string): string {
 // Magazine"). Unspaced hyphens stay: they're inside real words.
 const SUBTITLE_BOUNDARY = /[:;]|\s[-–—]\s/;
 
-// The title's main segment as words, punctuation stripped per word.
+// The title's main segment as words, punctuation stripped per word. Real
+// titles separate words with spaces; a file dragged in with no typed metadata
+// arrives as a hyphen-slug with no spaces ("the-college-campus-…"), where the
+// hyphens ARE the separators. Split on hyphens only in that no-space case, so
+// naming operates on real words rather than one long token.
 function mainTitleWords(title: string): string[] {
   const main = title.split(SUBTITLE_BOUNDARY)[0] ?? "";
+  const wordSplit = /\s/.test(main) ? /\s+/ : /[\s-]+/;
   return main
-    .split(/\s+/)
+    .split(wordSplit)
     .map((word) => word.replace(/[^\p{L}\p{N}''-]+/gu, ""))
     .filter(Boolean);
 }
@@ -82,9 +87,13 @@ export function handleCandidates(identity: NamingIdentity, maxCandidates = 12): 
   const words = significantTitleWords(identity.title);
   const prefix = surname ? [surname] : [];
   const candidates: string[] = [];
-  const push = (parts: string[]) => {
+  const push = (parts: string[]): boolean => {
     const slug = slugifyName(parts.join(" "));
-    if (slug && !candidates.includes(slug)) candidates.push(slug);
+    if (slug && !candidates.includes(slug)) {
+      candidates.push(slug);
+      return true;
+    }
+    return false;
   };
 
   const startCount = Math.min(2, words.length) || 0;
@@ -97,8 +106,15 @@ export function handleCandidates(identity: NamingIdentity, maxCandidates = 12): 
     if (base) push([base, String(identity.year)]);
   }
   if (!candidates.length) candidates.push("source");
-  const last = candidates[candidates.length - 1]!;
-  for (let n = 2; candidates.length < maxCandidates; n += 1) push([last, String(n)]);
+  // Numeric disambiguation. slugifyName truncates to 100 chars, so a base
+  // already at that length would swallow every "-N" suffix and produce the
+  // same slug forever — an over-length title once spun this loop to the 300s
+  // function kill. Cap the base to leave room for the suffix, and stop the
+  // instant a push fails to add a new slug, so the loop can never spin.
+  const numberedBase = candidates[candidates.length - 1]!.slice(0, 90).replace(/-+$/, "");
+  for (let n = 2; candidates.length < maxCandidates; n += 1) {
+    if (!push([numberedBase, String(n)])) break;
+  }
   return candidates;
 }
 
