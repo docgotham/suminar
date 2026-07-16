@@ -76,13 +76,28 @@ export function orgHandlePrefix(name: string): string {
 // Magazine"). Unspaced hyphens stay: they're inside real words.
 const SUBTITLE_BOUNDARY = /[:;]|\s[-–—]\s/;
 
+// A sentence boundary also ends the main segment: two-sentence essay titles
+// ("… Is Circumstantial. It Is Also Persuasive.") shorten to their first
+// sentence, exactly as a colon subtitle would. A period only counts after a
+// word of four-plus letters — "Mr. Smith", "U.S. Policy", and "Vol. 2"
+// survive — and before a capitalized continuation. A ? or ! always ends a
+// sentence and stays part of the title ("Who Governs?").
+const SENTENCE_TAIL = /^(.*?(?:[?!]|\p{L}{4}\.))\s+["'"'']?\p{Lu}/u;
+
+function mainSegment(title: string): string {
+  const main = (title.split(SUBTITLE_BOUNDARY)[0] ?? "").trim();
+  const sentence = SENTENCE_TAIL.exec(main);
+  if (!sentence) return main;
+  return sentence[1]!.replace(/(?<=\p{L})\.$/u, "").trim();
+}
+
 // The title's main segment as words, punctuation stripped per word. Real
 // titles separate words with spaces; a file dragged in with no typed metadata
 // arrives as a hyphen-slug with no spaces ("the-college-campus-…"), where the
 // hyphens ARE the separators. Split on hyphens only in that no-space case, so
 // naming operates on real words rather than one long token.
 function mainTitleWords(title: string): string[] {
-  const main = title.split(SUBTITLE_BOUNDARY)[0] ?? "";
+  const main = mainSegment(title);
   const wordSplit = /\s/.test(main) ? /\s+/ : /[\s-]+/;
   return main
     .split(wordSplit)
@@ -146,9 +161,10 @@ export function handleCandidates(identity: NamingIdentity, maxCandidates = 12): 
   return candidates;
 }
 
-// The title's main segment as a string (subtitle and save-as tails dropped).
+// The title's main segment as a string (subtitle, save-as tails, and any
+// second sentence dropped).
 export function mainTitle(title: string): string {
-  return (title.split(SUBTITLE_BOUNDARY)[0] ?? "").trim();
+  return mainSegment(title);
 }
 
 // "Thomas Sowell" → "Sowell, Thomas" for the head of a Works Cited entry.
@@ -178,21 +194,54 @@ export function mlaAuthorsLabel(authors: string[]): string | undefined {
   return dotTerminate(`${invertFirstAuthor(named[0]!)}, et al`);
 }
 
+// Words that read badly as the last word of a shortened title — trailing
+// prepositions and connectives get trimmed so "Affirmative Action Around"
+// becomes "Affirmative Action".
+const WEAK_TAIL_WORDS = new Set([...TITLE_STOPWORDS, "around", "toward", "towards", "versus", "against", "between", "among", "within", "without", "during", "after", "before", "under", "over", "about", "across", "along", "behind", "beyond", "near", "since", "through", "until"]);
+
+// The MLA in-text short form of a title: the main segment cut after its third
+// significant word, with articles and prepositions kept for readability —
+// "The Evidence for Political Bias", "Silence in the Classroom", "Affirmative
+// Action". This is how scholars disambiguate parenthetical citations, and it
+// is the registered short form handed to source agents so they never invent
+// an abbreviation of their own.
+export function mlaShortTitle(title: string): string {
+  const main = mainSegment(title);
+  const words = main.split(/\s+/).filter(Boolean);
+  let cutIndex = words.length;
+  let significant = 0;
+  for (let index = 0; index < words.length; index += 1) {
+    const bare = words[index]!.replace(/[^\p{L}\p{N}]/gu, "");
+    if (bare && !TITLE_STOPWORDS.has(bare.toLowerCase())) significant += 1;
+    if (significant === 3 && index < words.length - 1) { cutIndex = index + 1; break; }
+  }
+  let kept = words.slice(0, cutIndex);
+  while (kept.length > 1 && WEAK_TAIL_WORDS.has(kept[kept.length - 1]!.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase())) {
+    kept = kept.slice(0, -1);
+  }
+  return kept.join(" ").replace(/[,;.]+$/u, "").trim() || main;
+}
+
 export interface MlaCitationParts {
   authorsLabel?: string;
   title: string;
+  shortTitle?: string;
   year?: number;
 }
 
 // The derivable portion of an MLA entry: author head, full title (the formal
-// record keeps its subtitle), year. Container, publisher, and medium are not
-// collected — MLA tolerates citing what you have, and a verbatim
-// sourceIdentity.citation supersedes this derivation entirely.
+// record keeps its subtitle), the parenthetical short form, year. Container,
+// publisher, and medium are not collected — MLA tolerates citing what you
+// have, and a verbatim sourceIdentity.citation supersedes this derivation
+// entirely.
 export function mlaCitationParts(identity: NamingIdentity): MlaCitationParts {
   const authorsLabel = mlaAuthorsLabel(identity.authors);
+  const title = identity.title.trim() || "Untitled source";
+  const shortTitle = mlaShortTitle(title);
   return {
     ...(authorsLabel ? { authorsLabel } : {}),
-    title: identity.title.trim() || "Untitled source",
+    title,
+    ...(shortTitle !== title ? { shortTitle } : {}),
     ...(identity.year ? { year: identity.year } : {}),
   };
 }
@@ -200,12 +249,14 @@ export function mlaCitationParts(identity: NamingIdentity): MlaCitationParts {
 // Works Cited short form for the block header: "Surname, Main Title (Year)".
 // The main title keeps its article and its prepositions — display has room
 // for grace that slugs do not — but the subtitle stays dropped and the whole
-// thing is capped at a word boundary.
-export function deriveDisplayName(identity: NamingIdentity, maxTitleLength = 60): string {
+// thing is capped at a word boundary. The cap leaves room for a complete
+// first sentence of an essay-style title ("… Is Circumstantial", 68 chars)
+// rather than chopping it mid-clause.
+export function deriveDisplayName(identity: NamingIdentity, maxTitleLength = 80): string {
   const surname = identity.authors[0]
     ? (isCorporateAuthor(identity.authors[0]) ? identity.authors[0].trim() : surnameOf(identity.authors[0]))
     : "";
-  let title = (identity.title.split(SUBTITLE_BOUNDARY)[0] ?? "").trim();
+  let title = mainSegment(identity.title);
   if (title.length > maxTitleLength) {
     const cut = title.slice(0, maxTitleLength);
     title = (cut.slice(0, cut.lastIndexOf(" ")) || cut).trim();

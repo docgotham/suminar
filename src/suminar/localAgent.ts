@@ -20,6 +20,7 @@ import {
 import type { WholeSourceOccurrenceSearch } from "./retrieval.js";
 import { LocalArtifactReader } from "./artifacts.js";
 import type { ArtifactReader } from "./artifacts.js";
+import { mlaShortTitle } from "./naming.js";
 import type {
   AddressedMessagePacket,
   Citation,
@@ -119,6 +120,9 @@ export class OpenAiAnswerGenerator implements AnswerGenerator {
       : "";
     const quotationProhibitedForCorrection = envelope.responseConstraints.maxDirectQuoteWords === 0
       || (correction?.includes("The replacement must use no direct quotations or quotation marks.") ?? false);
+    // The sanctioned parenthetical short form (MLA in-text convention), so
+    // long or two-sentence titles never appear in full inside a citation.
+    const shortWorkTitle = mlaShortTitle(source.title);
     const instructions = [
       `You are ${manifest.card.displayName}, a situated source representative for one source and a genuine participant in a shared multi-party conversation: ${source.title}.`,
       "The host conversation includes the user, the user's primary host chatbot, and any source agents invoked there. Treat each as a conversational participant whose visible messages retain their own authorship.",
@@ -148,7 +152,9 @@ export class OpenAiAnswerGenerator implements AnswerGenerator {
         : "",
       "When the evidence you can see does not contain the passage you need—especially when responding to another participant's argument or defending a point you made in an earlier turn—call search_source_passages with content vocabulary from the source (its own topic words, phrases, or names, not the conversation's wording) before answering. Never cite a page that does not appear in the supplied or retrieved evidence; retrieve first, then cite.",
       "Use concise scholarly prose. Prefer a natural conversational answer in short paragraphs; use headings or lists only when they materially clarify the answer. For a straightforward explanatory question, answer in one or two short paragraphs without headings or lists, and do not imitate formatting merely because it appears in the conversation transcript. Cite source-dependent claims using the source authors/title and page shown in the evidence.",
-      `When naming the represented work in prose or citations, use its registered title exactly: ${source.title}. Do not present a chapter title, running-header title, or abbreviation as the work's title.`,
+      shortWorkTitle !== source.title
+        ? `When naming the represented work in prose, use its registered title exactly: ${source.title}. In parenthetical page citations, cite it by its registered short title — (${shortWorkTitle}, p. 12) — rather than the full title. Do not present a chapter title, running-header title, or an abbreviation of your own devising as the work's title.`
+        : `When naming the represented work in prose or citations, use its registered title exactly: ${source.title}. Do not present a chapter title, running-header title, or abbreviation as the work's title.`,
       "Direct quotations must be copied character-for-character from the supplied evidence and enclosed in quotation marks. If you use an Exact quotation heading, enclose the quoted passage beneath it in quotation marks so the runtime can verify and count it.",
       "A requested short quotation may be a contiguous phrase or clause excerpted from a longer sentence; it need not reproduce the complete sentence. Preserve the excerpt exactly and supply any necessary context in your own prose outside the quotation.",
       "When you provide the requested short quotation, answer directly without first claiming that no short quotation or sentence exists. If a quotation candidate is labeled as crossing PDF pages, cite the complete page range shown.",

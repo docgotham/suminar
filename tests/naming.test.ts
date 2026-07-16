@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveDisplayName, handleCandidates, invertFirstAuthor, isCorporateAuthor, mlaAuthorsLabel, mlaCitationParts, orgHandlePrefix, significantTitleWords, surnameOf } from "../src/suminar/naming.js";
+import { deriveDisplayName, handleCandidates, invertFirstAuthor, isCorporateAuthor, mainTitle, mlaAuthorsLabel, mlaCitationParts, mlaShortTitle, orgHandlePrefix, significantTitleWords, surnameOf } from "../src/suminar/naming.js";
 
 // The MLA convention: scholars disambiguate one author's works with shortened
 // titles, not dates — so derived handles are surname + short title, display
@@ -136,6 +136,7 @@ describe("MLA citation parts", () => {
     expect(parts).toEqual({
       authorsLabel: "Sowell, Thomas.",
       title: "Affirmative Action Around the World: An Empirical Study",
+      shortTitle: "Affirmative Action",
       year: 2004,
     });
     expect(mlaCitationParts({ authors: [], title: "Basic Economics" })).toEqual({ title: "Basic Economics" });
@@ -157,6 +158,42 @@ describe("display names", () => {
     const long = deriveDisplayName({ authors: ["Someone Longwinded"], title: "A ".repeat(10) + "Genuinely Interminable Meandering Extended Discourse Upon Matters Various" });
     expect(long.length).toBeLessThan(90);
     expect(long.endsWith(")")).toBe(false);
+  });
+});
+
+describe("sentence-boundary titles", () => {
+  // The live case: an authorless two-sentence essay title whose display name
+  // truncated mid-clause at "…Academic Hiring Is" (2026-07-16).
+  const essay = "The Evidence for Political Bias in Academic Hiring Is Circumstantial. It Is Also Persuasive.";
+
+  it("cuts the main title at the first sentence, like a subtitle", () => {
+    expect(mainTitle(essay)).toBe("The Evidence for Political Bias in Academic Hiring Is Circumstantial");
+    expect(deriveDisplayName({ authors: [], title: essay }))
+      .toBe("The Evidence for Political Bias in Academic Hiring Is Circumstantial");
+    expect(deriveDisplayName({ authors: [], title: essay, year: 2025 }))
+      .toBe("The Evidence for Political Bias in Academic Hiring Is Circumstantial (2025)");
+  });
+
+  it("keeps a ? or ! as part of the first sentence", () => {
+    expect(mainTitle("Who Governs? Democracy and Power in an American City")).toBe("Who Governs?");
+  });
+
+  it("does not mistake abbreviations or initials for sentence ends", () => {
+    expect(mainTitle("Mr. Smith Goes to Washington")).toBe("Mr. Smith Goes to Washington");
+    expect(mainTitle("U.S. Policy After the War")).toBe("U.S. Policy After the War");
+    expect(mainTitle("Vol. 2 of the Collected Works")).toBe("Vol. 2 of the Collected Works");
+  });
+
+  it("derives the MLA parenthetical short title", () => {
+    expect(mlaShortTitle(essay)).toBe("The Evidence for Political Bias");
+    expect(mlaShortTitle("Silence in the Classroom: The 2024 FIRE Faculty Survey Report")).toBe("Silence in the Classroom");
+    // A weak trailing word steps back: never end a short title on "Around".
+    expect(mlaShortTitle("Affirmative Action Around the World: An Empirical Study")).toBe("Affirmative Action");
+    expect(mlaShortTitle("Political Party Affiliation Among Academic Faculty")).toBe("Political Party Affiliation");
+    // Already short — unchanged, and mlaCitationParts omits a redundant copy.
+    expect(mlaShortTitle("The Souls of Black Folk")).toBe("The Souls of Black Folk");
+    expect(mlaCitationParts({ authors: [], title: "The Souls of Black Folk" }).shortTitle).toBeUndefined();
+    expect(mlaCitationParts({ authors: [], title: essay }).shortTitle).toBe("The Evidence for Political Bias");
   });
 });
 
