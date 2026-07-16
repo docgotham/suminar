@@ -53,10 +53,22 @@
   .status { font-size: .8125rem; color: var(--mut); min-height: 1.1rem; margin: .4rem 0 0; }
   .status.err { color: var(--err); }
 
+  .tabs { display: flex; gap: .4rem; margin: .2rem 0 .8rem; border-bottom: 1px solid var(--line); }
+  .tab {
+    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    color: var(--mut); font-size: .8438rem; font-weight: 600; padding: .35rem .6rem; cursor: pointer;
+  }
+  .tab:hover { color: var(--accent); background: none; }
+  .tab.active { color: var(--accent-contrast); border-bottom-color: var(--accent); }
+  .tablive { display: inline-block; width: .4rem; height: .4rem; border-radius: 50%; background: var(--accent); margin-left: .35rem; vertical-align: middle; }
+  #filter { position: sticky; top: 0; z-index: 2; }
   .entry {
     display: flex; align-items: flex-start; gap: .55rem;
     padding: .5rem 0; border-bottom: 1px solid var(--line);
   }
+  /* Author display rules beat the UA's [hidden] — restate it, or filtering
+     computes correctly while hiding nothing. */
+  .entry[hidden], .sem[hidden] { display: none; }
   .entry .dot { flex: 0 0 auto; width: .5rem; height: .5rem; border-radius: 50%; margin-top: .45rem; background: var(--mut); }
   .entry .dot.ready { background: var(--accent); }
   .entry .dot.warn { background: var(--accent-gold); }
@@ -105,13 +117,25 @@
     <a class="acct" href="/account/" target="_blank" rel="noopener">account ↗</a>
   </header>
 
-  <input id="filter" type="search" placeholder="Filter sources — title, author, @handle…" autocomplete="off">
-  <p class="status" id="pal-status" role="status"></p>
-  <div id="palette"></div>
+  <div class="tabs" role="tablist">
+    <button id="tab-shelf" class="tab active" type="button">Shelf</button>
+    <button id="tab-seminars" class="tab" type="button">Seminars<span id="tab-live-dot" class="tablive" hidden></span></button>
+  </div>
 
-  <h2>Seminars</h2>
-  <div id="seminars"></div>
-  <div class="toggleline"><button class="ghost" id="show-all" hidden>Show conversations without agent turns</button></div>
+  <section id="pane-shelf">
+    <input id="filter" type="search" placeholder="Filter sources — title, author, @handle…" autocomplete="off">
+    <p class="status" id="pal-status" role="status"></p>
+    <div id="palette"></div>
+    <div class="toggleline" id="pal-more-line" hidden>
+      <span class="status" id="pal-count"></span>
+      <button class="ghost" id="pal-show-all" type="button">Show all</button>
+    </div>
+  </section>
+
+  <section id="pane-seminars" hidden>
+    <div id="seminars"></div>
+    <div class="toggleline"><button class="ghost" id="show-all" hidden>Show conversations without agent turns</button></div>
+  </section>
 </div>
 
 <script>
@@ -194,13 +218,42 @@
     entry.dataset.search = ((citation?.verbatim || "") + " " + (citation?.authorsLabel || "") + " " + (citation?.title || "") + " " + (handle || "") + " " + (searchExtra || "")).toLowerCase();
     return entry;
   }
+  // Search-first at any scale: with no filter typed, only the most recent
+  // sources show (a 300-agent shelf is a thing you search, not scan); typing
+  // searches the whole shelf. "Show all" lifts the window for a browse.
+  const RECENT_LIMIT = 15;
+  let SHOW_ALL_SOURCES = false;
   function applyFilter() {
     const needle = $("filter").value.trim().toLowerCase();
-    for (const entry of $("palette").children) {
-      entry.hidden = Boolean(needle) && !entry.dataset.search.includes(needle);
+    const entries = [...$("palette").children];
+    let shown = 0;
+    for (const entry of entries) {
+      const matches = !needle || entry.dataset.search.includes(needle);
+      const withinWindow = Boolean(needle) || SHOW_ALL_SOURCES || shown < RECENT_LIMIT;
+      const visible = matches && withinWindow;
+      entry.hidden = !visible;
+      if (visible) shown += 1;
     }
+    const capped = !needle && !SHOW_ALL_SOURCES && entries.length > RECENT_LIMIT;
+    $("pal-more-line").hidden = !capped;
+    if (capped) $("pal-count").textContent = "Showing " + RECENT_LIMIT + " of " + entries.length + " — type to search the rest, or";
   }
   $("filter").addEventListener("input", applyFilter);
+  $("pal-show-all").addEventListener("click", () => { SHOW_ALL_SOURCES = true; applyFilter(); });
+
+  // ---- tabs: the two instruments, one tap apart at any shelf size ----
+  function setTab(which) {
+    try { sessionStorage.setItem("suminar_companion_tab", which); } catch {}
+    $("pane-shelf").hidden = which !== "shelf";
+    $("pane-seminars").hidden = which !== "seminars";
+    $("tab-shelf").classList.toggle("active", which === "shelf");
+    $("tab-seminars").classList.toggle("active", which === "seminars");
+  }
+  $("tab-shelf").addEventListener("click", () => setTab("shelf"));
+  $("tab-seminars").addEventListener("click", () => setTab("seminars"));
+  let bootTab = "shelf";
+  try { bootTab = sessionStorage.getItem("suminar_companion_tab") || "shelf"; } catch {}
+  setTab(bootTab);
 
   // ---- seminars ----
   function derivedTitle(seminar) {
@@ -219,6 +272,7 @@
     wrap.replaceChildren();
     const now = Date.now();
     let hidden = 0;
+    let anyLive = false;
     for (const seminar of seminars) {
       if (!SHOW_ALL && !seminar.agentTurns) { hidden += 1; continue; }
       const box = el("div", { class: "sem" });
@@ -226,7 +280,7 @@
       const named = Boolean(seminar.title);
       const title = el("span", { class: "title" + (named ? "" : " derived") }, seminar.title || derivedTitle(seminar));
       titleline.append(title);
-      if (now - Date.parse(seminar.updatedAt) < 180000) titleline.append(el("span", { class: "live" }, "live"));
+      if (now - Date.parse(seminar.updatedAt) < 180000) { titleline.append(el("span", { class: "live" }, "live")); anyLive = true; }
       const rename = el("button", { class: "renamebtn", type: "button", title: "Rename seminar" }, "✎");
       rename.addEventListener("click", () => {
         const input = el("input", { type: "text", maxlength: "200", value: seminar.title || "" });
@@ -256,6 +310,7 @@
     }
     $("show-all").hidden = SHOW_ALL || hidden === 0;
     if (!SHOW_ALL && hidden > 0) $("show-all").textContent = "Show " + hidden + " conversation" + (hidden === 1 ? "" : "s") + " without agent turns";
+    $("tab-live-dot").hidden = !anyLive;
   }
   $("show-all").addEventListener("click", () => { SHOW_ALL = true; loadAll(); });
 

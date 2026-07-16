@@ -101,9 +101,20 @@ record, live-updating: every source-agent turn exactly as authored (badge,
 styled titles, citations), healing host-side display lossiness (orphaned
 answers, stripped badges); plus the two-tier palette ("In this seminar"
 participants pinned above the full shelf). Needs an owner-scoped events read
-(seminar id → ordered canonical turns; tokens stay server-side). Later rungs:
-per-seminar works-cited export, provenance/signature panel, markdown
-transcript export.
+(seminar id → ordered canonical turns; tokens stay server-side). **Renaming
+lives on the seminar page** (Dave, 2026-07-16): the record view is where a
+seminar is managed; the companion-home list becomes pure navigation and its
+interim ✎ relocates there when the page exists. Later rungs: per-seminar
+works-cited export, provenance/signature panel, markdown transcript export.
+
+**Scale plan (implemented 1.0.32):** the shelf must survive 300 sources —
+search-first, not scan-first. The companion is two TABS (Shelf | Seminars,
+one tap apart at any shelf size; last tab persisted; live dot on the
+Seminars tab when a record is growing), and the unfiltered palette shows only
+the ~15 most recent sources ("Showing 15 of N — type to search the rest, or
+Show all"); typing always searches the whole shelf. Future recency upgrade:
+order by last-invoked rather than last-uploaded once usage data is worth
+reading.
 
 ## Host over-deliberation: terrain fixes, never disposition fixes
 
