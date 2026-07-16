@@ -206,6 +206,9 @@ export class HostedIngestionService {
       handle = await this.firstFreeHandle(handleCandidates(identity), agentId);
     }
     const displayName = options.displayName?.trim() || existingCard?.displayName || deriveDisplayName(identity);
+    const t0 = Date.now();
+    const stamp = (label: string): void => console.log(`[suminar-timing] ${agentId} ${label} @${Date.now() - t0}ms`);
+    stamp("persist begin");
     // The annotated-bibliography line: supplied wins, the source's own opening
     // text is mined next, metadata composition is the floor.
     const annotation = deriveAnnotation({
@@ -221,15 +224,21 @@ export class HostedIngestionService {
     sourceIdentity.annotationSource = annotation.source;
     const card = buildSourceAgentCard({ agentId, displayName, handle, sourceIdentity }, keys.publicKey);
 
+    stamp("card built");
     const chunksJsonl = extraction.chunks.map((chunk) => JSON.stringify(chunk)).join("\n");
     const uploads: Array<{ kind: ArtifactKind; storageKey: string; byteSize: number | null }> = [];
     uploads.push({ kind: "markdown", ...(await this.uploadBytes(agentId, "markdown", extraction.markdown)) });
+    stamp("markdown uploaded");
     uploads.push({ kind: "chunks", ...(await this.uploadBytes(agentId, "chunks", chunksJsonl)) });
+    stamp("chunks uploaded");
     uploads.push({ kind: "extraction_report", ...(await this.uploadBytes(agentId, "extraction_report", JSON.stringify(extraction.extractionReport ?? {}))) });
     uploads.push({ kind: "private_key", ...(await this.uploadBytes(agentId, "private_key", keys.privateKey)) });
+    stamp("report+key uploaded");
     const embeddingsJsonl = await this.computeEmbeddings(extraction.chunks);
+    stamp(`embeddings ${embeddingsJsonl ? "computed" : "skipped"}`);
     if (embeddingsJsonl) {
       uploads.push({ kind: "embeddings", ...(await this.uploadBytes(agentId, "embeddings", embeddingsJsonl)) });
+      stamp("embeddings uploaded");
     }
     // The original stays where the upload put it; reference it in place.
     uploads.push({ kind: "original", storageKey: doc.storage_key, byteSize: null });
@@ -250,6 +259,7 @@ export class HostedIngestionService {
       { onConflict: "agent_id,kind" },
     ).select("id");
     if (artifactInsert.error) throw new Error(`Persist artifacts: ${artifactInsert.error.message}`);
+    stamp("db rows written — persist complete");
 
     return { agentId, extractionStatus: extraction.extractionStatus };
   }
@@ -314,9 +324,12 @@ export class HostedIngestionService {
     try {
       let result: { agentId: string; extractionStatus: LocalAgentManifest["extractionStatus"] };
       if (endpoint && secret) {
+        const te = Date.now();
         const signed = await this.client.storage.from(this.bucket).createSignedUrl(doc.data.storage_key as string, 300);
         if (signed.error || !signed.data?.signedUrl) throw new Error(`Signed URL failed: ${signed.error?.message ?? "no url"}`);
+        console.log(`[suminar-timing] ${documentId} extract begin @${Date.now() - te}ms`);
         const extraction = await this.httpExtract(endpoint, secret, signed.data.signedUrl, kind);
+        console.log(`[suminar-timing] ${documentId} extract returned @${Date.now() - te}ms (${extraction.pageCount}p ${extraction.chunks.length}ch)`);
         result = await this.persistExtraction(documentId, { filename: doc.data.filename as string, storage_key: doc.data.storage_key as string }, extraction, options);
       } else {
         if (kind !== "pdf") throw new Error("Local fallback ingestion supports PDF only; configure the extraction function for .docx");
