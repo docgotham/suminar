@@ -117,6 +117,8 @@
   tr.docrow { cursor: pointer; }
   tr.docrow:hover td { background: color-mix(in srgb, var(--accent-tint) 40%, transparent); }
   .chev { display: inline-block; width: 1rem; color: var(--mut); font-size: .75rem; }
+  .shelfcontrols { display: flex; gap: .5rem; justify-content: flex-end; margin-bottom: .45rem; }
+  .shelfcontrols button { font-size: .75rem; padding: .25rem .6rem; }
   tr.detailrow > td { background: var(--accent-tint); border-radius: 4px; }
   .detailbox { padding: .85rem 1rem .95rem; }
   .detailbox .anno { margin-top: 0; max-width: 60ch; }
@@ -215,6 +217,10 @@
       <div class="dashmain">
       <div class="card" id="docs-card">
         <h2>Source agents</h2>
+        <div class="shelfcontrols" id="docs-controls" hidden>
+          <button class="ghost" type="button" id="docs-expand">Expand all</button>
+          <button class="ghost" type="button" id="docs-collapse">Collapse all</button>
+        </div>
         <div class="tablewrap"><table id="docs-table" hidden>
           <thead><tr><th style="width:1.2rem"></th><th>Source</th><th>Agent</th><th>Status</th></tr></thead>
           <tbody></tbody>
@@ -407,6 +413,35 @@
   function slugHandle(value) {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
   }
+  // Disclosure state survives the full-table rebuild every save triggers, so
+  // the card being edited stays open. Keyed by documentId / grant id.
+  const OPEN_DOCS = new Set();
+  let ROW_TOGGLES = [];
+  function wireDisclosure(tr, chev, detail, key) {
+    const setOpen = (want) => {
+      detail.hidden = !want;
+      chev.textContent = want ? "▾" : "▸";
+      tr.setAttribute("aria-expanded", want ? "true" : "false");
+      if (want) OPEN_DOCS.add(key); else OPEN_DOCS.delete(key);
+    };
+    tr.addEventListener("click", () => setOpen(detail.hidden));
+    ROW_TOGGLES.push(setOpen);
+    if (OPEN_DOCS.has(key)) setOpen(true);
+    return setOpen;
+  }
+  // The citation line's title, styled per MLA by work type: quotation marks
+  // for a contained work (article, essay), italics for a standalone one and
+  // for the not-yet-classified (the pre-workType status quo).
+  function appendCiteTitle(cite, citation, workType) {
+    const punct = /[.!?]$/.test(citation.title) ? "" : ".";
+    const yearTail = citation.year ? " " + citation.year + "." : "";
+    if (workType === "contained") {
+      cite.append(document.createTextNode("“" + citation.title + punct + "”" + yearTail));
+    } else {
+      cite.append(el("i", {}, citation.title));
+      cite.append(document.createTextNode(punct + yearTail));
+    }
+  }
   // The inline metadata editor: title, authors, year, full date, and @handle,
   // all hand-correctable at any time. Auto-identify pre-fills these; each
   // field shows where its value came from, so a web-guessed date reads
@@ -497,9 +532,11 @@
     const rows = docsBody.documents || [];
     const table = $("docs-table"), tbody = table.querySelector("tbody");
     tbody.replaceChildren();
+    ROW_TOGGLES = [];
     const total = rows.length + (SYN.received || []).length;
     $("docs-empty").hidden = total > 0;
     table.hidden = total === 0;
+    $("docs-controls").hidden = total === 0;
     for (const doc of rows) {
       // Compact row: chevron, the MLA citation, handle, status. Everything
       // else lives in the disclosure row below (the Voices adaptation).
@@ -515,9 +552,7 @@
         cite.append(document.createTextNode(citation.verbatim));
       } else if (citation?.title) {
         if (citation.authorsLabel) cite.append(document.createTextNode(citation.authorsLabel + " "));
-        cite.append(el("i", {}, citation.title));
-        const punct = /[.!?]$/.test(citation.title) ? "" : ".";
-        cite.append(document.createTextNode(punct + (citation.year ? " " + citation.year + "." : "")));
+        appendCiteTitle(cite, citation, doc.agent?.workType);
       } else {
         cite.append(document.createTextNode(doc.filename || "(unnamed)"));
       }
@@ -644,11 +679,10 @@
       dtd.append(box);
       detail.append(dtd);
 
-      tr.addEventListener("click", () => {
-        const open = detail.hidden;
-        detail.hidden = !open;
-        chev.textContent = open ? "▾" : "▸";
-      });
+      const setOpen = wireDisclosure(tr, chev, detail, doc.documentId);
+      const closeBtn = el("button", { class: "ghost", type: "button" }, "Close");
+      closeBtn.addEventListener("click", () => setOpen(false));
+      actions.append(closeBtn);
       tbody.append(tr, detail);
     }
 
@@ -667,8 +701,7 @@
         cite.append(document.createTextNode(citation.verbatim));
       } else if (citation?.title) {
         if (citation.authorsLabel) cite.append(document.createTextNode(citation.authorsLabel + " "));
-        cite.append(el("i", {}, citation.title));
-        cite.append(document.createTextNode((/[.!?]$/.test(citation.title) ? "" : ".") + (citation.year ? " " + citation.year + "." : "")));
+        appendCiteTitle(cite, citation, received.workType);
       } else {
         cite.append(document.createTextNode(received.displayName || received.localHandle));
       }
@@ -700,14 +733,15 @@
       box.append(actions, rowStatus);
       dtd.append(box);
       detail.append(dtd);
-      tr.addEventListener("click", () => {
-        const open = detail.hidden;
-        detail.hidden = !open;
-        chev.textContent = open ? "▾" : "▸";
-      });
+      const setOpen = wireDisclosure(tr, chev, detail, "syn-" + received.grantId);
+      const closeBtn = el("button", { class: "ghost", type: "button" }, "Close");
+      closeBtn.addEventListener("click", () => setOpen(false));
+      actions.append(closeBtn);
       tbody.append(tr, detail);
     }
   }
+  $("docs-expand").addEventListener("click", () => ROW_TOGGLES.forEach((toggle) => toggle(true)));
+  $("docs-collapse").addEventListener("click", () => ROW_TOGGLES.forEach((toggle) => toggle(false)));
   // Export feedback renders inside the row that was clicked — links and
   // errors both — never in a distant status line (found live 2026-07-14).
   async function exportDoc(id, box, statusNode) {

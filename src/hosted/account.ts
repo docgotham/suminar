@@ -114,7 +114,7 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   return json({ error: "not_found" }, 404);
 }
 
-type AgentCardShape = { handle?: string; displayName?: string; sourceIdentity?: { title?: string; authors?: string[]; year?: number; citation?: string; annotation?: string; annotationSource?: string } };
+type AgentCardShape = { handle?: string; displayName?: string; sourceIdentity?: { title?: string; authors?: string[]; year?: number; workType?: string; citation?: string; annotation?: string; annotationSource?: string } };
 
 // Mint a syndication code for an agent the caller owns. Hash-at-rest, shown
 // exactly once, like every credential here.
@@ -202,6 +202,7 @@ async function listSyndications(client: SupabaseClient, owner: string): Promise<
         citation: identity.citation
           ? { verbatim: identity.citation }
           : mlaCitationParts({ authors: identity.authors ?? [], title: identity.title ?? "", ...(identity.year ? { year: identity.year } : {}) }),
+        workType: identity.workType ?? null,
         annotation: identity.annotation ?? null,
         annotationSource: identity.annotationSource ?? null,
         grantorEmail: emails.get(row.grantor_user_id as string) ?? "(unknown)",
