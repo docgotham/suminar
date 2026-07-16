@@ -123,6 +123,17 @@
   .tiertag { font-size: .6875rem; color: var(--mut); opacity: .8; margin-left: .4rem; }
   .detailmeta { font-size: .71875rem; color: var(--mut); opacity: .75; margin-top: .55rem; font-family: Consolas, ui-monospace, monospace; word-break: break-all; }
   .detailactions { margin-top: .8rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+  .metaeditor { margin-top: .2rem; padding: .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--accent-tint); display: grid; gap: .55rem; }
+  .metafield label { display: block; font-size: .72rem; font-weight: 600; margin-bottom: .2rem; }
+  .metafield input { width: 100%; }
+  .metarow { display: flex; gap: .6rem; }
+  .metarow > div { flex: 1; }
+  .provchip { font-weight: 400; font-size: .68rem; }
+  .provchip.ok { color: var(--accent); }
+  .provchip.warn { color: var(--accent-gold); font-weight: 600; }
+  .provchip.edited { color: var(--mut); }
+  .hpreview { font-size: .72rem; color: var(--mut); margin-left: .45rem; font-family: Consolas, ui-monospace, monospace; }
+  .metabtns { display: flex; gap: .5rem; margin-top: .1rem; }
   .draftwrap { margin-top: .9rem; }
   .draftta {
     width: 100%; min-height: 4.5rem; margin-top: .4rem; font: inherit; font-size: .875rem;
@@ -214,8 +225,11 @@
         <form id="upload" style="margin-top: .75rem">
           <div class="row" style="margin-top:.5rem">
             <div style="flex: 2 1 14rem"><label for="up-file">File</label><input id="up-file" type="file" accept="application/pdf,.pdf,.docx" required></div>
-            <div><label for="up-title">Title</label><input id="up-title" placeholder="optional"></div>
+            <div><label for="up-title">Title</label><input id="up-title" placeholder="optional — identified for you"></div>
           </div>
+          <label style="display:flex; align-items:center; gap:.45rem; margin-top:.5rem; font-size:.8125rem; color:var(--mut);">
+            <input type="checkbox" id="up-identify" checked style="width:auto"> Identify author, title &amp; date for me — reads the file, checks Crossref, and (for a missing date) searches the web. Leave any field blank and it fills in.
+          </label>
           <div class="row" style="margin-top:.4rem">
             <div><label for="up-authors">Authors</label><input id="up-authors" placeholder="Separate with semicolons"></div>
             <div style="flex:0 1 7rem"><label for="up-year">Year</label><input id="up-year" type="number" min="0" max="2100"></div>
@@ -390,6 +404,80 @@
 
   // ---- the shelf: owned documents plus syndicated agents ----
   let SYN = { codes: [], granted: [], received: [] };
+  function slugHandle(value) {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
+  }
+  // The inline metadata editor: title, authors, year, full date, and @handle,
+  // all hand-correctable at any time. Auto-identify pre-fills these; each
+  // field shows where its value came from, so a web-guessed date reads
+  // "verify". Saving writes only the card (no re-extraction).
+  function buildMetaEditor(doc, rowStatus) {
+    const a = doc.agent || {};
+    const prov = a.metadataProvenance || {};
+    const ed = el("div", { class: "metaeditor" });
+    const chip = (key) => {
+      const p = prov[key];
+      if (p === "web") return el("span", { class: "provchip warn" }, "⚠ from the web — verify");
+      if (p === "crossref") return el("span", { class: "provchip ok" }, "✓ Crossref");
+      if (p === "document") return el("span", { class: "provchip ok" }, "✓ from the document");
+      if (p === "manual") return el("span", { class: "provchip edited" }, "· edited");
+      return null;
+    };
+    const field = (labelText, input, key) => {
+      const w = el("div", { class: "metafield" });
+      const lab = el("label", {}, labelText);
+      const c = key ? chip(key) : null;
+      if (c) { lab.append(document.createTextNode(" ")); lab.append(c); }
+      w.append(lab, input);
+      return w;
+    };
+    const titleI = el("input", { type: "text", maxlength: "500", value: a.title || "" });
+    const authorsI = el("input", { type: "text", value: (a.authors || []).join("; "), placeholder: "Separate multiple authors with ;" });
+    const yearI = el("input", { type: "number", min: "1", max: "3000", value: a.year != null ? String(a.year) : "" });
+    const dateI = el("input", { type: "text", maxlength: "100", value: a.publicationDate || "", placeholder: "e.g. 2026-03-15 (optional)" });
+    const handleI = el("input", { type: "text", value: a.handle || "" });
+    const hprev = el("span", { class: "hpreview" });
+    const refreshPreview = () => {
+      const s = slugHandle(handleI.value);
+      hprev.textContent = handleI.value.trim() ? "→ @" + (s || "…") : "(will be derived from title & author)";
+    };
+    handleI.addEventListener("input", refreshPreview);
+    refreshPreview();
+    const yearRow = el("div", { class: "metarow" });
+    yearRow.append(field("Year", yearI, "year"), field("Publication date", dateI, "publicationDate"));
+    const handleField = field("@handle (how you address it in chat)", handleI, null);
+    handleField.querySelector("label").append(hprev);
+
+    const saveBtn = el("button", { type: "button" }, "Save");
+    saveBtn.addEventListener("click", async () => {
+      rowStatus.className = "status"; rowStatus.textContent = "Saving…"; saveBtn.disabled = true;
+      const payload = {
+        title: titleI.value.trim(),
+        authors: authorsI.value.trim(),
+        year: yearI.value.trim() === "" ? null : Number(yearI.value),
+        publicationDate: dateI.value.trim() === "" ? null : dateI.value.trim(),
+      };
+      const h = handleI.value.trim();
+      if (h && h !== (a.handle || "")) payload.handle = h;
+      try {
+        await api("/documents/" + encodeURIComponent(doc.documentId) + "/metadata", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+        await loadDocs();
+      } catch (error) { rowStatus.className = "status err"; rowStatus.textContent = error.message; saveBtn.disabled = false; }
+    });
+    const idBtn = el("button", { class: "ghost", type: "button" }, "Re-identify");
+    idBtn.addEventListener("click", async () => {
+      rowStatus.className = "status"; rowStatus.textContent = "Identifying — reading the document, checking Crossref…"; idBtn.disabled = true;
+      try {
+        await api("/documents/" + encodeURIComponent(doc.documentId) + "/identify", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+        await loadDocs();
+      } catch (error) { rowStatus.className = "status err"; rowStatus.textContent = error.message; idBtn.disabled = false; }
+    });
+    const btns = el("div", { class: "metabtns" });
+    btns.append(saveBtn, idBtn);
+    ed.append(field("Title", titleI, "title"), field("Author(s)", authorsI, "authors"), yearRow, handleField, btns);
+    return ed;
+  }
+
   async function loadDocs() {
     const [docsBody, synBody] = await Promise.all([
       api("/documents"),
@@ -434,6 +522,8 @@
       const detail = el("tr", { class: "detailrow", hidden: "" });
       const dtd = el("td", { colspan: "4" });
       const box = el("div", { class: "detailbox" });
+      const rowStatus = el("p", { class: "status", role: "status" });
+      if (doc.agent) box.append(buildMetaEditor(doc, rowStatus));
       if (doc.agent?.annotation) {
         const anno = el("div", { class: "anno" }, doc.agent.annotation);
         if (doc.agent.annotationSource) anno.append(el("span", { class: "tiertag" }, "· " + doc.agent.annotationSource));
@@ -441,28 +531,10 @@
       }
       box.append(el("div", { class: "detailmeta" },
         (doc.filename || "") + " · uploaded " + fmtDate(doc.createdAt) + (doc.byteSize ? " · " + fmtBytes(doc.byteSize) : "")));
-      const rowStatus = el("p", { class: "status", role: "status" });
       const exportsBox = el("div", { class: "exports" });
       const actions = el("div", { class: "detailactions" });
       const exportBtn = el("button", { class: "ghost", type: "button" }, "Export");
       exportBtn.addEventListener("click", () => exportDoc(doc.documentId, exportsBox, rowStatus));
-      const renameBtn = el("button", { class: "ghost", type: "button" }, "Rename");
-      renameBtn.addEventListener("click", async () => {
-        const current = doc.agent?.handle ?? "";
-        const next = prompt("New @handle for this source agent:", current);
-        if (!next || !next.trim() || next.trim() === current) return;
-        rowStatus.className = "status"; rowStatus.textContent = "Renaming…";
-        try {
-          await api("/documents/" + encodeURIComponent(doc.documentId) + "/process", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ handle: next.trim() }),
-          });
-          await loadDocs();
-        } catch (error) {
-          rowStatus.className = "status err"; rowStatus.textContent = error.message;
-        }
-      });
       const reBtn = el("button", { class: "ghost", type: "button" }, "Reprocess");
       reBtn.addEventListener("click", async () => {
         rowStatus.className = "status"; rowStatus.textContent = "Reprocessing — extraction and annotation re-derive…";
@@ -554,9 +626,9 @@
             synBtn.disabled = false;
           }
         });
-        actions.append(exportBtn, renameBtn, draftBtn, synBtn, reBtn, delBtn);
+        actions.append(exportBtn, draftBtn, synBtn, reBtn, delBtn);
       } else {
-        actions.append(exportBtn, renameBtn, reBtn, delBtn);
+        actions.append(exportBtn, reBtn, delBtn);
       }
       box.append(actions, draftBox, synBox, exportsBox, rowStatus);
       dtd.append(box);
@@ -665,7 +737,17 @@
     setStatus("up-status", "Uploading and building the agent — extraction and embeddings can take a minute…");
     try {
       const body = await api("/documents", { method: "POST", body: form });
-      setStatus("up-status", body.status === "ready" ? "Agent ready." : "Status: " + body.status + (body.error_description ? " — " + body.error_description : ""));
+      if (body.documentId && body.status !== "failed" && $("up-identify").checked) {
+        setStatus("up-status", "Agent built. Identifying author, title & date — reading the file and checking Crossref…");
+        try {
+          await api("/documents/" + encodeURIComponent(body.documentId) + "/identify", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          setStatus("up-status", "Ready and identified — open the source below to review or correct the details.");
+        } catch {
+          setStatus("up-status", "Ready. Auto-identify didn't finish — open the source below to fill in the details.");
+        }
+      } else {
+        setStatus("up-status", body.status === "ready" ? "Agent ready." : "Status: " + body.status + (body.error_description ? " — " + body.error_description : ""));
+      }
       $("upload").reset();
       await Promise.all([loadDocs(), loadUsage()]);
     } catch (error) {
