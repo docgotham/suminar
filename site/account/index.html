@@ -189,7 +189,8 @@
       </svg>
       <span class="wordmark">Sum<span class="dot">·</span>inar</span>
     </a>
-    <button id="signout" class="ghost" hidden>Sign out</button>
+    <button id="open-companion" class="ghost" hidden style="margin-left:auto" title="Open the companion in its own window — the palette and seminar list, built to sit beside your chatbot">Companion ↗</button>
+    <button id="signout" class="ghost" hidden style="margin-left:.5rem">Sign out</button>
   </div>
 </header>
 
@@ -377,12 +378,14 @@
     TOKEN = null;
     try { sessionStorage.removeItem("suminar_token"); } catch {}
     dash.hidden = true; gate.hidden = false; signout.hidden = true;
+    $("open-companion").hidden = true;
     if (message) setStatus("gate-status", message, true);
   }
   async function enter(token) {
     TOKEN = token;
     try { sessionStorage.setItem("suminar_token", token); } catch {}
     gate.hidden = true; dash.hidden = false; signout.hidden = false;
+    $("open-companion").hidden = false;
     await Promise.all([loadDocs(), loadTokens(), loadInvites(), loadUsage()]).catch(() => {});
   }
 
@@ -424,6 +427,15 @@
     try { await navigator.clipboard.writeText($("rec-token").textContent); $("rec-copy").textContent = "Copied"; } catch {}
   });
   signout.addEventListener("click", () => showGate());
+  // The companion opens in its own window and asks this page for the session
+  // token over same-origin postMessage — no credential ever rides a URL.
+  $("open-companion").addEventListener("click", () => {
+    window.open("/companion", "suminar-companion", "width=440,height=900");
+  });
+  window.addEventListener("message", (event) => {
+    if (event.origin !== location.origin || event.data !== "suminar:token?") return;
+    if (TOKEN && event.source) event.source.postMessage({ type: "suminar:token", token: TOKEN }, location.origin);
+  });
 
   // ---- the shelf: owned documents plus syndicated agents ----
   let SYN = { codes: [], granted: [], received: [] };

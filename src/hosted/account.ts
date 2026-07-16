@@ -104,6 +104,8 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   if (request.method === "POST" && resource === "invites" && !id) return issueInvite(client, owner, body ?? {});
   if (request.method === "POST" && resource === "invites" && id && action === "revoke") return revokeInvite(client, owner, id);
   if (request.method === "GET" && resource === "usage" && !id) return usage(client, owner);
+  if (request.method === "GET" && resource === "seminars" && !id) return listSeminars(client, owner);
+  if (request.method === "POST" && resource === "seminars" && id && action === "title") return renameSeminar(client, owner, id, body ?? {});
   if (resource === "syndications") {
     const sub = segments[5];
     if (request.method === "POST" && !id) return mintSyndicationCode(client, owner, body ?? {});
@@ -115,6 +117,34 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
 }
 
 type AgentCardShape = { handle?: string; displayName?: string; sourceIdentity?: { title?: string; authors?: string[]; year?: number; workType?: string; citation?: string; annotation?: string; annotationSource?: string } };
+
+// The companion's seminar list: the owner-facing view of conversations,
+// newest first, with the raw material for a derived title. Conversation
+// TOKENS never leave the server — seminars travel by their public ids.
+async function listSeminars(client: SupabaseClient, owner: string): Promise<Response> {
+  const { data, error } = await client.rpc("list_seminars", { p_owner: owner });
+  if (error) return json({ error: "server_error", error_description: error.message }, 500);
+  return json({ seminars: data ?? [] });
+}
+
+// Rename a seminar: explicit wins, the standing rule. An empty title clears
+// the custom name and the derived title takes over again.
+async function renameSeminar(client: SupabaseClient, owner: string, seminarId: string, body: Record<string, unknown>): Promise<Response> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seminarId)) {
+    return json({ error: "invalid_request", error_description: "A valid seminar id is required." }, 400);
+  }
+  const raw = typeof body.title === "string" ? body.title.trim() : "";
+  const title = raw ? raw.slice(0, 200) : null;
+  const update = await client.from("conversations")
+    .update({ title })
+    .eq("owner", owner)
+    .eq("id", seminarId)
+    .select("id, title")
+    .maybeSingle();
+  if (update.error) return json({ error: "server_error", error_description: update.error.message }, 500);
+  if (!update.data) return json({ error: "not_found" }, 404);
+  return json({ seminarId, title: update.data.title ?? null });
+}
 
 // Mint a syndication code for an agent the caller owns. Hash-at-rest, shown
 // exactly once, like every credential here.

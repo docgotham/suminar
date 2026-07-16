@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Suminar — companion</title>
+<style>
+  @font-face {
+    font-family: 'Instrument Sans';
+    font-style: normal; font-weight: 400 700; font-display: swap;
+    src: url(/fonts/InstrumentSans-var.woff2) format('woff2');
+  }
+  :root {
+    --accent: #2b46c8; --accent-deep: #1a2a6e; --accent-gold: #d9a527;
+    --accent-tint: #e9eefb; --accent-contrast: #10142a; --paper: #f7f7f2;
+    --mut: #5c6070; --line: #dfe0d9; --card: #ffffff; --err: #b4232c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #5570e8; --accent-deep: #8095ee; --accent-gold: #e5b53a;
+      --accent-tint: #141a38; --accent-contrast: #e6e7ef; --paper: #0e1226;
+      --mut: #9aa0b5; --line: #232946; --card: #131834; --err: #f07880;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--accent-contrast);
+    font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif; line-height: 1.5;
+  }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* The lectern card: one narrow column, designed for a window beside a chat. */
+  .col { max-width: 34rem; margin: 0 auto; padding: 1rem 1rem 3rem; }
+  header { display: flex; align-items: baseline; gap: .55rem; margin: .3rem 0 1rem; }
+  .wordmark { font-weight: 700; font-size: 1.05rem; letter-spacing: .01em; }
+  .wordmark .dot { color: var(--accent); }
+  .sublabel { font-size: .6875rem; letter-spacing: .09em; text-transform: uppercase; color: var(--mut); font-weight: 600; }
+  header a.acct { margin-left: auto; font-size: .78125rem; text-decoration: none; }
+  h2 { font-size: .6875rem; letter-spacing: .09em; text-transform: uppercase; color: var(--mut); font-weight: 600; margin: 1.4rem 0 .5rem; }
+  input {
+    width: 100%; font: inherit; font-size: .9063rem; color: var(--accent-contrast);
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .5rem .65rem;
+  }
+  input::placeholder { color: var(--mut); }
+  button {
+    font: inherit; font-size: .8125rem; background: var(--accent); color: var(--paper);
+    border: 0; border-radius: 4px; padding: .35rem .8rem; cursor: pointer;
+  }
+  button:hover { background: var(--accent-deep); }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button.ghost:hover { border-color: var(--accent); background: transparent; }
+  .status { font-size: .8125rem; color: var(--mut); min-height: 1.1rem; margin: .4rem 0 0; }
+  .status.err { color: var(--err); }
+
+  .entry {
+    display: flex; align-items: flex-start; gap: .55rem;
+    padding: .5rem 0; border-bottom: 1px solid var(--line);
+  }
+  .entry .dot { flex: 0 0 auto; width: .5rem; height: .5rem; border-radius: 50%; margin-top: .45rem; background: var(--mut); }
+  .entry .dot.ready { background: var(--accent); }
+  .entry .dot.warn { background: var(--accent-gold); }
+  .entry .dot.bad { background: var(--err); }
+  .entry .body { flex: 1 1 auto; min-width: 0; }
+  .cite { font-size: .8438rem; line-height: 1.4; }
+  .handlechip {
+    display: inline-block; margin-top: .25rem;
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: .75rem; padding: .1rem .5rem; border: 1px solid var(--line); border-radius: 999px;
+    background: transparent; color: var(--accent-contrast); cursor: copy;
+  }
+  .handlechip:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent-tint) 60%, transparent); }
+  .handlechip.copied { border-color: var(--accent); background: var(--accent-tint); color: var(--accent); }
+
+  .sem { padding: .55rem 0; border-bottom: 1px solid var(--line); }
+  .sem .titleline { display: flex; align-items: baseline; gap: .5rem; }
+  .sem .title { font-size: .875rem; font-weight: 600; flex: 1 1 auto; min-width: 0; }
+  .sem .title.derived { font-weight: 400; font-style: italic; }
+  .sem .meta { font-size: .75rem; color: var(--mut); margin-top: .15rem; }
+  .live {
+    display: inline-block; font-size: .65625rem; font-weight: 700; letter-spacing: .06em;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 .45rem;
+  }
+  .renamebtn { background: none; border: none; color: var(--mut); cursor: pointer; font-size: .8125rem; padding: 0 .2rem; }
+  .renamebtn:hover { color: var(--accent); background: none; }
+  .toggleline { margin-top: .5rem; }
+  .toggleline button { font-size: .75rem; }
+  #gate { max-width: 26rem; margin: 3rem auto; padding: 0 1rem; }
+  #gate p { font-size: .875rem; color: var(--mut); }
+</style>
+</head>
+<body>
+<div id="gate" hidden>
+  <div class="wordmark">Sum<span class="dot">·</span>inar <span class="sublabel">companion</span></div>
+  <p>Paste a connector token to open the companion, or open it from your <a href="/account/">account page</a> (already signed in there? it hands the key over automatically).</p>
+  <input id="gate-token" type="password" autocomplete="off" placeholder="suminar_…">
+  <div style="margin-top: .8rem"><button id="gate-open">Open companion</button></div>
+  <p class="status" id="gate-status" role="status"></p>
+</div>
+
+<div class="col" id="main" hidden>
+  <header>
+    <span class="wordmark">Sum<span class="dot">·</span>inar</span>
+    <span class="sublabel">companion</span>
+    <a class="acct" href="/account/" target="_blank" rel="noopener">account ↗</a>
+  </header>
+
+  <input id="filter" type="search" placeholder="Filter sources — title, author, @handle…" autocomplete="off">
+  <p class="status" id="pal-status" role="status"></p>
+  <div id="palette"></div>
+
+  <h2>Seminars</h2>
+  <div id="seminars"></div>
+  <div class="toggleline"><button class="ghost" id="show-all" hidden>Show conversations without agent turns</button></div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  function el(tag, attrs = {}, text) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  let TOKEN = null;
+  try { TOKEN = sessionStorage.getItem("suminar_token"); } catch {}
+
+  async function api(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (TOKEN) headers.set("authorization", "Bearer " + TOKEN);
+    const res = await fetch(path, { ...options, headers });
+    if (res.status === 401) { showGate("That token was not accepted — it may have been revoked."); throw new Error("unauthorized"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error_description || body.error || ("HTTP " + res.status));
+    return body;
+  }
+
+  function showGate(message) {
+    TOKEN = null;
+    try { sessionStorage.removeItem("suminar_token"); } catch {}
+    $("main").hidden = true;
+    $("gate").hidden = false;
+    if (message) { $("gate-status").textContent = message; $("gate-status").className = "status err"; }
+  }
+  function openWith(token) {
+    TOKEN = token;
+    try { sessionStorage.setItem("suminar_token", token); } catch {}
+    $("gate").hidden = true;
+    $("main").hidden = false;
+    loadAll();
+  }
+  $("gate-open").addEventListener("click", () => {
+    const token = $("gate-token").value.trim();
+    if (!token.startsWith("suminar_")) { $("gate-status").textContent = "Connector tokens start with suminar_"; $("gate-status").className = "status err"; return; }
+    openWith(token);
+  });
+  $("gate-token").addEventListener("keydown", (e) => { if (e.key === "Enter") $("gate-open").click(); });
+
+  // ---- the palette ----
+  function handleChip(handle) {
+    const chip = el("button", { class: "handlechip", type: "button", title: "Click to copy @" + handle }, "@" + handle);
+    chip.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText("@" + handle);
+        const prior = chip.textContent;
+        chip.textContent = "✓ copied";
+        chip.classList.add("copied");
+        setTimeout(() => { chip.textContent = prior; chip.classList.remove("copied"); }, 1200);
+      } catch {}
+    });
+    return chip;
+  }
+  // MLA title styling per work type; unclassified stays bare (Dave's rule).
+  function citeNode(citation, workType) {
+    const cite = el("div", { class: "cite" });
+    if (citation?.verbatim) { cite.textContent = citation.verbatim; return cite; }
+    if (!citation?.title) return cite;
+    if (citation.authorsLabel) cite.append(document.createTextNode(citation.authorsLabel + " "));
+    const punct = /[.!?]$/.test(citation.title) ? "" : ".";
+    const yearTail = citation.year ? " " + citation.year + "." : "";
+    if (workType === "contained") cite.append(document.createTextNode("“" + citation.title + punct + "”" + yearTail));
+    else if (workType === "standalone") { cite.append(el("i", {}, citation.title)); cite.append(document.createTextNode(punct + yearTail)); }
+    else cite.append(document.createTextNode(citation.title + punct + yearTail));
+    return cite;
+  }
+  function paletteEntry(citation, workType, handle, statusClass, searchExtra) {
+    const entry = el("div", { class: "entry" });
+    entry.append(el("span", { class: "dot " + statusClass }));
+    const body = el("div", { class: "body" });
+    body.append(citeNode(citation, workType));
+    if (handle) body.append(handleChip(handle));
+    entry.append(body);
+    entry.dataset.search = ((citation?.verbatim || "") + " " + (citation?.authorsLabel || "") + " " + (citation?.title || "") + " " + (handle || "") + " " + (searchExtra || "")).toLowerCase();
+    return entry;
+  }
+  function applyFilter() {
+    const needle = $("filter").value.trim().toLowerCase();
+    for (const entry of $("palette").children) {
+      entry.hidden = Boolean(needle) && !entry.dataset.search.includes(needle);
+    }
+  }
+  $("filter").addEventListener("input", applyFilter);
+
+  // ---- seminars ----
+  function derivedTitle(seminar) {
+    const line = (seminar.firstUserLine || "").replace(/\s+/g, " ").trim();
+    if (!line) return "Seminar";
+    if (line.length <= 64) return line;
+    const cut = line.slice(0, 64);
+    return (cut.slice(0, cut.lastIndexOf(" ")) || cut).trim() + "…";
+  }
+  function fmtDay(iso) {
+    try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }); } catch { return ""; }
+  }
+  let SHOW_ALL = false;
+  function renderSeminars(seminars) {
+    const wrap = $("seminars");
+    wrap.replaceChildren();
+    const now = Date.now();
+    let hidden = 0;
+    for (const seminar of seminars) {
+      if (!SHOW_ALL && !seminar.agentTurns) { hidden += 1; continue; }
+      const box = el("div", { class: "sem" });
+      const titleline = el("div", { class: "titleline" });
+      const named = Boolean(seminar.title);
+      const title = el("span", { class: "title" + (named ? "" : " derived") }, seminar.title || derivedTitle(seminar));
+      titleline.append(title);
+      if (now - Date.parse(seminar.updatedAt) < 180000) titleline.append(el("span", { class: "live" }, "live"));
+      const rename = el("button", { class: "renamebtn", type: "button", title: "Rename seminar" }, "✎");
+      rename.addEventListener("click", () => {
+        const input = el("input", { type: "text", maxlength: "200", value: seminar.title || "" });
+        input.placeholder = derivedTitle(seminar);
+        const save = el("button", { type: "button", style: "margin-left:.4rem" }, "Save");
+        save.addEventListener("click", async () => {
+          try {
+            await api("/api/account/seminars/" + encodeURIComponent(seminar.seminarId) + "/title", {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ title: input.value.trim() }),
+            });
+            await loadAll();
+          } catch (error) { $("pal-status").textContent = error.message; $("pal-status").className = "status err"; }
+        });
+        input.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
+        const editline = el("div", { style: "display:flex; margin:.2rem 0 .1rem" });
+        editline.append(input, save);
+        titleline.replaceWith(editline);
+        input.focus();
+      });
+      titleline.append(rename);
+      box.append(titleline);
+      const who = (seminar.participants || []).map((p) => "@" + p.handle).join("  ");
+      box.append(el("div", { class: "meta" },
+        fmtDay(seminar.createdAt) + " · " + seminar.agentTurns + " agent turn" + (seminar.agentTurns === 1 ? "" : "s") + (who ? " · " + who : "")));
+      wrap.append(box);
+    }
+    $("show-all").hidden = SHOW_ALL || hidden === 0;
+    if (!SHOW_ALL && hidden > 0) $("show-all").textContent = "Show " + hidden + " conversation" + (hidden === 1 ? "" : "s") + " without agent turns";
+  }
+  $("show-all").addEventListener("click", () => { SHOW_ALL = true; loadAll(); });
+
+  // ---- load + refresh ----
+  async function loadAll() {
+    try {
+      const [docsBody, synBody, semBody] = await Promise.all([
+        api("/documents"),
+        api("/api/account/syndications").catch(() => ({ received: [] })),
+        api("/api/account/seminars").catch(() => ({ seminars: [] })),
+      ]);
+      const palette = $("palette");
+      palette.replaceChildren();
+      for (const doc of (docsBody.documents || [])) {
+        if (!doc.agent) continue;
+        const statusClass = doc.status === "ready" ? "ready" : doc.status === "failed" ? "bad" : "warn";
+        palette.append(paletteEntry(doc.agent.citation, doc.agent.workType, doc.agent.handle, statusClass, doc.filename));
+      }
+      for (const received of (synBody.received || [])) {
+        palette.append(paletteEntry(received.citation, received.workType, received.localHandle, "warn", "syndicated"));
+      }
+      applyFilter();
+      $("pal-status").textContent = "";
+      renderSeminars(semBody.seminars || []);
+    } catch (error) {
+      if (error.message !== "unauthorized") { $("pal-status").textContent = error.message; $("pal-status").className = "status err"; }
+    }
+  }
+  // A long-lived side window stays fresh without hammering the account
+  // budget: refresh on focus, and once a minute while visible.
+  window.addEventListener("focus", () => { if (TOKEN) loadAll(); });
+  setInterval(() => { if (TOKEN && document.visibilityState === "visible") loadAll(); }, 60000);
+
+  // ---- boot: session token, opener handoff, or the gate ----
+  if (TOKEN) { openWith(TOKEN); return; }
+  if (window.opener) {
+    let answered = false;
+    window.addEventListener("message", (event) => {
+      if (event.origin !== location.origin) return;
+      if (answered || !event.data || event.data.type !== "suminar:token" || typeof event.data.token !== "string") return;
+      answered = true;
+      openWith(event.data.token);
+    });
+    try { window.opener.postMessage("suminar:token?", location.origin); } catch {}
+    setTimeout(() => { if (!answered) showGate(); }, 1500);
+  } else {
+    showGate();
+  }
+})();
+</script>
+</body>
+</html>

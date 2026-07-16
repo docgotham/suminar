@@ -67,6 +67,44 @@ upload (v1.0.18): fixed the large-file bug, corrected the ceiling to the real
 Option B) on top; (3) defer the durable queue until a real user needs to close
 the tab mid-batch.
 
+## The companion surface (Dave-approved 2026-07-16; increment 1 SHIPPED, increment 2 open)
+
+**The pattern.** Suminar has no chat surface by design — the host thread is
+the conversation. The flip side: Suminar's own window is free to be the
+*instrument panel beside the seminar*. Dave's observed workflow (chatbot
+window left, Suminar window right, copy @handles across) is the architecture
+made visible. Guardrails: the companion must be a **plain URL** (works in any
+browser window or embedded webview; no host-ecosystem coupling — explicitly
+NOT a Claude artifact), and it stays **instruments, not dialogue** — it may
+prepare speech (copy chips, composed @prefixes) but never deliver it (no send
+button; that would recreate a second chat surface and the broadcast
+temptation).
+
+**Ontology.** *Shelf* = your sources. *Seminar* = one host thread's
+conversation: named (derived-by-default from the first user turn + date;
+owner rename wins forever; empty rename reverts), publicly identified by
+`conversations.id` uuid (tokens are credentials and never appear in URLs),
+with a canonical record. *Companion* = the URL presenting both, narrow-first.
+
+**Increment 1 (shipped, 1.0.31):** `/companion` — filter-as-you-type palette
+(styled citations, copy chips, status dots, no admin actions), named seminar
+list (LIVE badge when recently active; zero-agent-turn conversations — sync
+stubs and token-loss husks — hidden behind "show all"), inline rename.
+Owner-scoped `GET /api/account/seminars` (via `list_seminars()` SQL,
+migration 20260716200000) + `POST /api/account/seminars/:id/title`. Account
+page gains "Companion ↗" (window.open) and hands the session token to the
+companion over same-origin postMessage — credentials never ride URLs.
+Refresh: on focus + 60s while visible (stays inside accountPerOwner budget).
+
+**Increment 2 (open):** the seminar page — click a seminar → its canonical
+record, live-updating: every source-agent turn exactly as authored (badge,
+styled titles, citations), healing host-side display lossiness (orphaned
+answers, stripped badges); plus the two-tier palette ("In this seminar"
+participants pinned above the full shelf). Needs an owner-scoped events read
+(seminar id → ordered canonical turns; tokens stay server-side). Later rungs:
+per-seminar works-cited export, provenance/signature panel, markdown
+transcript export.
+
 ## Host over-deliberation: terrain fixes, never disposition fixes
 
 **The incident (2026-07-14, live seminar):** the host described an @handle
