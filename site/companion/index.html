@@ -24,6 +24,10 @@
     }
   }
   * { box-sizing: border-box; }
+  /* The hidden attribute must always win: any author display rule (flex,
+     inline-block) outranks the UA's [hidden] otherwise — the disease that
+     made pills, dots, bars, and tabs unhideable. */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--paper); color: var(--accent-contrast);
     font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif; line-height: 1.5;
@@ -66,9 +70,6 @@
     display: flex; align-items: flex-start; gap: .55rem;
     padding: .5rem 0; border-bottom: 1px solid var(--line);
   }
-  /* Author display rules beat the UA's [hidden] — restate it, or filtering
-     computes correctly while hiding nothing. */
-  .entry[hidden], .sem[hidden] { display: none; }
   .entry .dot { flex: 0 0 auto; width: .5rem; height: .5rem; border-radius: 50%; margin-top: .45rem; background: var(--mut); }
   .entry .dot.ready { background: var(--accent); }
   .entry .dot.warn { background: var(--accent-gold); }

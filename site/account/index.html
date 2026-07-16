@@ -29,6 +29,9 @@
     }
   }
   * { box-sizing: border-box; }
+  /* The hidden attribute must always win: any author display rule (flex,
+     inline-block) outranks the UA's [hidden] otherwise. */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--paper); color: var(--accent-contrast);
     font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif; line-height: 1.55;
