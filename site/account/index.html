@@ -65,6 +65,12 @@
   button:disabled { opacity: .6; cursor: default; }
   button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
   button.ghost:hover { border-color: var(--accent); background: transparent; }
+  a.btnlink {
+    display: inline-block; font-size: .875rem; font-weight: 600; text-decoration: none;
+    background: transparent; color: var(--accent); border: 1px solid var(--line);
+    border-radius: 4px; padding: .5rem 1rem;
+  }
+  a.btnlink:hover { border-color: var(--accent); }
   button.danger { background: transparent; color: var(--err); border: 1px solid var(--line); }
   button.danger:hover { border-color: var(--err); background: transparent; }
   .card {
@@ -192,7 +198,7 @@
       </svg>
       <span class="wordmark">Sum<span class="dot">·</span>inar</span>
     </a>
-    <button id="open-companion" class="ghost" hidden style="margin-left:auto" title="Open the companion in its own window — the palette and seminar list, built to sit beside your chatbot">Companion ↗</button>
+    <a id="open-companion" class="ghost btnlink" href="/companion" hidden style="margin-left:auto" title="The palette and seminar list, built to sit beside your chatbot. Opens right here — ctrl-click for a tab, or install the companion as its own app from that page.">Companion</a>
     <button id="signout" class="ghost" hidden style="margin-left:.5rem">Sign out</button>
   </div>
 </header>
@@ -430,10 +436,13 @@
     try { await navigator.clipboard.writeText($("rec-token").textContent); $("rec-copy").textContent = "Copied"; } catch {}
   });
   signout.addEventListener("click", () => showGate());
-  // The companion opens in its own window and asks this page for the session
-  // token over same-origin postMessage — no credential ever rides a URL.
+  // The companion is a plain link — the frame it's clicked in decides the
+  // window shape (a browser panel stays a panel; ctrl-click makes a tab; the
+  // installable app covers the own-window case). Before navigation, seed the
+  // companion's persistent sign-in so it arrives authenticated; the
+  // postMessage responder below still serves any popup-opened companion.
   $("open-companion").addEventListener("click", () => {
-    window.open("/companion", "suminar-companion", "width=440,height=900");
+    if (TOKEN) { try { localStorage.setItem("suminar_token", TOKEN); } catch {} }
   });
   window.addEventListener("message", (event) => {
     if (event.origin !== location.origin || event.data !== "suminar:token?") return;
