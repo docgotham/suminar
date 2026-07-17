@@ -185,6 +185,34 @@ function errorContinuation(token: string | undefined, cursor: number | undefined
   };
 }
 
+// A sync-state rejection carries its own recovery. The service's cursor
+// errors name the server's current position; hand it back as continuation
+// state so the host can silently re-synchronize from there — only the
+// unacknowledged events — instead of declaring the server broken. Observed
+// live 2026-07-17: a host whose first address timed out client-side (the
+// answer WAS recorded) retried from its stale cursor, was correctly refused
+// by the duplicate-delivery guard, and reported the server as failing.
+function syncStateRecovery(token: string | undefined, detail: string): ErrorContinuation | undefined {
+  if (!token) return undefined;
+  const named = detail.match(/cursor (?:is )?(\d+)/i);
+  if (!named) return undefined;
+  const cursor = Number.parseInt(named[1]!, 10);
+  if (!Number.isInteger(cursor) || cursor < 0) return undefined;
+  return {
+    text: [
+      `RECOVERY: this conversation remains valid at server cursor ${cursor}. Silently re-synchronize with afterCursor ${cursor}, sending only the events the server has not acknowledged (normally just the current turn), then proceed. A canonical response recorded after an earlier timed-out call is returned in that synchronization result — display it verbatim rather than re-delivering the address. Never start a new conversation for this host thread.`,
+      modelReadableContinuation(token, cursor),
+    ].join("\n\n"),
+    payload: {
+      conversationContinuation: {
+        conversationToken: token,
+        cursor,
+        instruction: "Re-synchronize from this cursor with only unacknowledged events; never display.",
+      },
+    },
+  };
+}
+
 function proposalToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[]) {
   const proposal = result.proposedHostAddress!;
   const text = [
@@ -231,7 +259,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
   }
   const blocks = result.messages.map((message) => message.displayText).join("\n\n");
   const failureNotice = result.failures.length
-    ? `\n\n${result.failures.map((failure) => `@${failure.handle}`).join(", ")} could not complete a verifiable response on this attempt. Addressing ${result.failures.length > 1 ? "them" : "it"} again may succeed.`
+    ? `\n\n${result.failures.map((failure) => `@${failure.handle}`).join(", ")} could not complete a verifiable response on this attempt. The response may still have been recorded after this call ended: synchronize the conversation first — a recorded answer returns in the synchronization result for display — and only address again if none appears.`
     : "";
   const contract = result.visibleHostAddress
     ? `VISIBLE TURN ORDER CONTRACT: ${SHARED_CONTRACT_CORE} The host-authored @address below is your own already-recorded speech, not the user's: display it exactly first, then each source-agent block exactly and in order.`
@@ -250,7 +278,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
     : [];
   const sourceSections = result.messages.length
     ? ["BEGIN CANONICAL SOURCE-AGENT BLOCKS", blocks, `END CANONICAL SOURCE-AGENT BLOCKS${failureNotice}`]
-    : [`${result.failures.map((failure) => `@${failure.handle}`).join(", ") || "The addressed source agent"} could not complete a verifiable response on this attempt. Addressing ${result.failures.length > 1 ? "them" : "it"} again may succeed.`];
+    : [`${result.failures.map((failure) => `@${failure.handle}`).join(", ") || "The addressed source agent"} could not complete a verifiable response on this attempt. The response may still have been recorded after this call ended: synchronize the conversation first — a recorded answer returns in the synchronization result for display — and only address again if none appears.`];
   const text = [
     contract,
     ...displayCheckSection(recovered),
@@ -321,10 +349,10 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
 }
 
 function invocationFailure(detail: string, recovered?: RecoveredCanonicalTurn[], continuation?: ErrorContinuation) {
-  const requiredDisclosure = "The addressed source agent could not complete a verifiable response on this attempt. Addressing it again may succeed.";
+  const requiredDisclosure = "The addressed source agent could not complete a verifiable response on this attempt. Its answer may still arrive as the conversation continues.";
   return toolResult([
     ...displayCheckSection(recovered),
-    `HOST FAILURE CONTRACT: ${recovered?.length ? "After first displaying any missing canonical blocks from the display check above, say" : "Say"} only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path.`,
+    `HOST FAILURE CONTRACT: ${recovered?.length ? "After first displaying any missing canonical blocks from the display check above, say" : "Say"} only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path. Before any re-address in a later turn, synchronize the conversation: a response recorded after a timed-out call returns in the synchronization result for display, and re-delivering the same address would duplicate it.`,
     requiredDisclosure,
     `INTERNAL FAILURE DETAIL: ${detail}`,
     ...(continuation ? [continuation.text] : []),
@@ -337,13 +365,15 @@ function invocationFailure(detail: string, recovered?: RecoveredCanonicalTurn[],
   }, true, { "agent-sum/internal": { detail } });
 }
 
-function protocolMisuse(detail: string) {
+function protocolMisuse(detail: string, continuation?: ErrorContinuation) {
   return toolResult([
     "HOST PROTOCOL ERROR: This tool call was malformed. Correct the call and retry silently. Do not mention this mechanical error to the user and do not treat it as a source-agent failure.",
     detail,
+    ...(continuation ? [continuation.text] : []),
   ].join("\n\n"), {
     status: "protocol_misuse",
     messages: [],
+    ...(continuation ? continuation.payload : {}),
     displayContract: { retrySilently: true },
   }, true, { "agent-sum/internal": { detail } });
 }
@@ -483,7 +513,13 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
         { "agent-sum/internal": { conversationToken: result.conversationToken, cursor: result.cursor } },
       );
     } catch (error) {
-      return toolResult(error instanceof Error ? error.message : String(error), undefined, true);
+      const detail = error instanceof Error ? error.message : String(error);
+      const recovery = syncStateRecovery(conversationToken, detail);
+      return toolResult(
+        [detail, ...(recovery ? [recovery.text] : [])].join("\n\n"),
+        recovery ? { ...recovery.payload } : undefined,
+        true,
+      );
     }
   });
 
@@ -572,7 +608,8 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
             events,
           });
         } catch (error) {
-          return protocolMisuse(error instanceof Error ? error.message : String(error));
+          const detail = error instanceof Error ? error.message : String(error);
+          return protocolMisuse(detail, syncStateRecovery(token, detail));
         }
         token = sync.conversationToken;
         cursor = sync.cursor;
@@ -599,9 +636,12 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
         ? proposalToolResult(result, conductNotices, recovered)
         : canonicalMessageToolResult(result, conductNotices, recovered);
     } catch (error) {
-      const continuation = errorContinuation(token, cursor);
+      const detail = error instanceof Error ? error.message : String(error);
+      // A cursor-state error names the server's true position; prefer handing
+      // that back over echoing the host's (possibly stale) cursor.
+      const continuation = syncStateRecovery(token, detail) ?? errorContinuation(token, cursor);
       if (error instanceof DirectAddressRequiredError) return directAddressRequired(error, continuation);
-      return invocationFailure(error instanceof Error ? error.message : String(error), recovered, continuation);
+      return invocationFailure(detail, recovered, continuation);
     }
   });
 
