@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { DirectAddressRequiredError } from "../core/conversationService.js";
 import type { ConversationService, SyncableConversationEvent } from "../core/conversationService.js";
 import type { AgentRef, ConversationInvocationResult, RecoveredCanonicalTurn } from "../core/types.js";
+import { agentCardSchema, responseEnvelopeSchema, sourceIdentitySchema } from "../core/schemas.js";
 
 export const USER_MESSAGE_META_KEY = "agent-sum/user-message-v1";
 export const CONVERSATION_EVENTS_META_KEY = "agent-sum/conversation-events-v1";
@@ -122,20 +123,26 @@ function publicAgent(agent: AgentRef) {
   };
 }
 
-// The declared shape of publicAgent() for tool output schemas. The fields a
-// host needs to act on — handle, display name, origin, transport — are typed
-// precisely; the deeper card sub-objects stay permissive so the schema can
-// never reject a real card (their content is descriptive, not actionable).
+// The declared shape of publicAgent() for tool output schemas. The card
+// sub-objects reuse the card's OWN validation schemas — the data already
+// passed them at ingestion, so the output schema matches by construction and
+// carries real type information (an untyped z.unknown() serializes to an empty
+// {} that tells the model nothing, and hosts flag it as no schema at all).
+// contextPolicy is spelled out to its stored (post-transform) shape rather
+// than reusing the card's refine/transform variant.
 const publicAgentOutputSchema = z.object({
   handle: z.string(),
   displayName: z.string(),
   origin: z.string(),
   transport: z.string(),
-  sourceIdentity: z.unknown().optional(),
-  representativeCharter: z.unknown().optional(),
-  capabilities: z.unknown().optional(),
-  contextPolicy: z.unknown().optional(),
-  memoryAndRetention: z.unknown().optional(),
+  sourceIdentity: sourceIdentitySchema,
+  representativeCharter: agentCardSchema.shape.representativeCharter,
+  capabilities: agentCardSchema.shape.capabilities,
+  contextPolicy: z.object({
+    acceptsConversationContext: z.boolean(),
+    maxContextMessages: z.number().int().min(0),
+  }),
+  memoryAndRetention: agentCardSchema.shape.memoryAndRetention,
 });
 
 const HOST_CONDUCT_RULES = [
@@ -731,21 +738,10 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     inputSchema: { messageId: z.string() },
     outputSchema: {
       // authoredMessage is the exact canonical utterance to reproduce; the
-      // envelope is provenance. Citations stay permissive (their inner shape
-      // is descriptive, not actioned by the host).
+      // envelope is provenance, declared with the envelope's own validation
+      // schema so it matches what was recorded and carries real types.
       authoredMessage: z.string(),
-      responseEnvelope: z.object({
-        protocolVersion: z.unknown(),
-        messageId: z.string(),
-        replyToInvocationId: z.string(),
-        agentId: z.string(),
-        agentVersion: z.string(),
-        agentCardDigest: z.string(),
-        authoredMessage: z.string(),
-        citations: z.array(z.unknown()),
-        contentHash: z.string(),
-        signature: z.string(),
-      }),
+      responseEnvelope: responseEnvelopeSchema,
     },
   }, async ({ messageId }) => {
     const record = await service.store.readAgentMessage(messageId);
@@ -765,7 +761,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
       preview: z.object({
         manifestUrl: z.string(),
         manifestDigest: z.string(),
-        firstContactWarning: z.unknown().optional(),
+        firstContactWarning: z.string(),
         agent: publicAgentOutputSchema,
       }),
     },
