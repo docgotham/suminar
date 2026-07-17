@@ -122,6 +122,22 @@ function publicAgent(agent: AgentRef) {
   };
 }
 
+// The declared shape of publicAgent() for tool output schemas. The fields a
+// host needs to act on — handle, display name, origin, transport — are typed
+// precisely; the deeper card sub-objects stay permissive so the schema can
+// never reject a real card (their content is descriptive, not actionable).
+const publicAgentOutputSchema = z.object({
+  handle: z.string(),
+  displayName: z.string(),
+  origin: z.string(),
+  transport: z.string(),
+  sourceIdentity: z.unknown().optional(),
+  representativeCharter: z.unknown().optional(),
+  capabilities: z.unknown().optional(),
+  contextPolicy: z.unknown().optional(),
+  memoryAndRetention: z.unknown().optional(),
+});
+
 const HOST_CONDUCT_RULES = [
   "You are one participant in this shared conversation. Transport privileges give you no authority over, and no duty toward, another participant's speech.",
   "Reproduce each canonical turn exactly and in order, including its bold 📄 attribution line with the origin marker; build nothing around it.",
@@ -434,6 +450,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     description: "List source agents available to address by handle. This exposes source identity and origin facts, never private source artifacts or conversation state.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {},
+    outputSchema: { agents: z.array(publicAgentOutputSchema) },
   }, async () => {
     const agents = (await service.listAgents()).map(publicAgent);
     return toolResult(JSON.stringify(agents, null, 2), { agents });
@@ -444,6 +461,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     description: "Inspect one source agent's public source identity, origin, representative charter, capabilities, context policy, and retention declaration.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { agentHandle: z.string().describe("The source agent's handle, with or without @.") },
+    outputSchema: { agent: publicAgentOutputSchema },
   }, async ({ agentHandle }) => {
     try {
       const agent = publicAgent(await service.resolveAgent(agentHandle));
@@ -570,6 +588,15 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
       deliverySummary: z.array(z.unknown()).optional(),
       failures: z.array(z.unknown()).optional(),
       hostConductNotices: z.array(z.string()).optional(),
+      // Recovery resupply of recent canonical turns, same shape as sync's, for
+      // the display check. Emitted by canonicalMessageToolResult; declared here
+      // so the schema matches what the tool actually returns.
+      recentCanonicalTurns: z.array(z.object({
+        sequence: z.number().int().min(1),
+        speakerType: z.string(),
+        displayText: z.string(),
+        displayOnlyIfMissing: z.boolean(),
+      })).optional(),
       displayContract: z.record(z.string(), z.unknown()),
       status: z.string().optional(),
     },
@@ -654,6 +681,16 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
       inputSchema: {
         resumeCode: z.string().min(8).max(200).describe("The resume code exactly as the user provided it."),
       },
+      outputSchema: {
+        conversationContinuation: z.object({
+          conversationToken: z.string(),
+          cursor: z.number().int().min(0),
+          instruction: z.string(),
+        }),
+        seminarTitle: z.string(),
+        priorTurns: z.number().int().min(0),
+        participants: z.array(z.string()),
+      },
     }, async ({ resumeCode }) => {
       try {
         const result = await redeem(resumeCode.trim());
@@ -692,6 +729,24 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     description: "Recover an exact canonical source-agent utterance by its internal message ID. The host should use IDs only from private tool metadata and never expose them to the user.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { messageId: z.string() },
+    outputSchema: {
+      // authoredMessage is the exact canonical utterance to reproduce; the
+      // envelope is provenance. Citations stay permissive (their inner shape
+      // is descriptive, not actioned by the host).
+      authoredMessage: z.string(),
+      responseEnvelope: z.object({
+        protocolVersion: z.unknown(),
+        messageId: z.string(),
+        replyToInvocationId: z.string(),
+        agentId: z.string(),
+        agentVersion: z.string(),
+        agentCardDigest: z.string(),
+        authoredMessage: z.string(),
+        citations: z.array(z.unknown()),
+        contentHash: z.string(),
+        signature: z.string(),
+      }),
+    },
   }, async ({ messageId }) => {
     const record = await service.store.readAgentMessage(messageId);
     if (!record?.responseEnvelope) return toolResult("Canonical message not found", undefined, true);
@@ -706,6 +761,14 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     description: "Inspect a proposed remote source-agent card before adding it through the local management interface. This verifies factual origin and protocol fields, not scholarly quality.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     inputSchema: { manifestUrl: z.string().url() },
+    outputSchema: {
+      preview: z.object({
+        manifestUrl: z.string(),
+        manifestDigest: z.string(),
+        firstContactWarning: z.unknown().optional(),
+        agent: publicAgentOutputSchema,
+      }),
+    },
   }, async ({ manifestUrl }) => {
     try {
       const preview = await service.previewRemoteAgent(manifestUrl);
