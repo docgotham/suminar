@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>Suminar — companion</title>
+<!-- Installable as a standalone app window (no browser chrome): the palette
+     and record, pinnable beside any chat. Adaptive title bar via the two
+     theme-color metas; manifest theme_color is the fallback. -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="manifest" href="/companion/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/companion/icon-192.png">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f2">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1226">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Companion">
 <style>
   @font-face {
     font-family: 'Instrument Sans';
@@ -41,6 +51,8 @@
   .wordmark .dot { color: var(--accent); }
   .sublabel { font-size: .6875rem; letter-spacing: .09em; text-transform: uppercase; color: var(--mut); font-weight: 600; }
   header a.acct { margin-left: auto; font-size: .78125rem; text-decoration: none; }
+  .acctlink { background: none; border: none; color: var(--mut); font-size: .78125rem; cursor: pointer; padding: 0 0 0 .7rem; }
+  .acctlink:hover { color: var(--accent); background: none; }
   h2 { font-size: .6875rem; letter-spacing: .09em; text-transform: uppercase; color: var(--mut); font-weight: 600; margin: 1.4rem 0 .5rem; }
   input {
     width: 100%; font: inherit; font-size: .9063rem; color: var(--accent-contrast);
@@ -163,6 +175,7 @@
     <span class="wordmark">Sum<span class="dot">·</span>inar</span>
     <span class="sublabel">companion</span>
     <a class="acct" href="/account/" target="_blank" rel="noopener">account ↗</a>
+    <button class="acctlink" id="signout" type="button">sign out</button>
   </header>
 
   <div class="tabs" role="tablist" id="tabs">
@@ -216,8 +229,12 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
+  // The companion persists its token (localStorage, not session): installed as
+  // a standalone app it launches from its own icon with no account-page opener
+  // to hand it the token, so it must remember across launches. The account
+  // page stays session-scoped; sign out here clears the persisted token.
   let TOKEN = null;
-  try { TOKEN = sessionStorage.getItem("suminar_token"); } catch {}
+  try { TOKEN = localStorage.getItem("suminar_token"); } catch {}
 
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -231,14 +248,14 @@
 
   function showGate(message) {
     TOKEN = null;
-    try { sessionStorage.removeItem("suminar_token"); } catch {}
+    try { localStorage.removeItem("suminar_token"); } catch {}
     $("main").hidden = true;
     $("gate").hidden = false;
     if (message) { $("gate-status").textContent = message; $("gate-status").className = "status err"; }
   }
   function openWith(token) {
     TOKEN = token;
-    try { sessionStorage.setItem("suminar_token", token); } catch {}
+    try { localStorage.setItem("suminar_token", token); } catch {}
     $("gate").hidden = true;
     $("main").hidden = false;
     loadAll();
@@ -250,6 +267,7 @@
     openWith(token);
   });
   $("gate-token").addEventListener("keydown", (e) => { if (e.key === "Enter") $("gate-open").click(); });
+  $("signout").addEventListener("click", () => showGate());
 
   // ---- the palette ----
   function handleChip(handle) {

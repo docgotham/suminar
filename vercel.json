@@ -4,6 +4,9 @@
   "buildCommand": "npm run build",
   "outputDirectory": "site",
   "cleanUrls": true,
+  "headers": [
+    { "source": "/companion/manifest.webmanifest", "headers": [{ "key": "content-type", "value": "application/manifest+json; charset=utf-8" }] }
+  ],
   "functions": {
     "api/extract.py": { "maxDuration": 300 },
     "api/documents.js": { "maxDuration": 300 },
