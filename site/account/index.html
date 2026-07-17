@@ -65,8 +65,20 @@
   button:disabled { opacity: .6; cursor: default; }
   button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
   button.ghost:hover { border-color: var(--accent); background: transparent; }
-  a.quietlink { font-size: .8125rem; color: var(--mut); text-decoration: underline; text-underline-offset: 2px; }
-  a.quietlink:hover { color: var(--accent); }
+  /* Split control: one destination, two window shapes. The label navigates
+     in place (right inside an embedded browser panel); the attached glyph
+     segment pops the companion out as a floating window. */
+  #companion-controls { margin-left: auto; display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 4px; }
+  #companion-controls:hover { border-color: var(--accent); }
+  #companion-controls > a, #companion-controls > button {
+    font: inherit; font-size: .875rem; font-weight: 600; color: var(--accent);
+    background: transparent; border: 0; cursor: pointer;
+    display: inline-flex; align-items: center; text-decoration: none;
+  }
+  #companion-controls > a { padding: .5rem .85rem; border-radius: 3px 0 0 3px; }
+  #companion-controls > button { padding: .5rem .55rem; border-left: 1px solid var(--line); border-radius: 0 3px 3px 0; }
+  #companion-controls > a:hover, #companion-controls > button:hover { background: var(--card); }
+  #companion-controls svg { display: block; }
   button.danger { background: transparent; color: var(--err); border: 1px solid var(--line); }
   button.danger:hover { border-color: var(--err); background: transparent; }
   .card {
@@ -194,9 +206,15 @@
       </svg>
       <span class="wordmark">Sum<span class="dot">·</span>inar</span>
     </a>
-    <span id="companion-controls" hidden style="margin-left:auto; display:flex; gap:.65rem; align-items:center">
-      <a id="open-companion-here" class="quietlink" href="/companion" title="Open the companion in this tab — for the built-in browser panel in the ChatGPT or Claude desktop apps, where a pop-out would escape the panel">open here</a>
-      <button id="open-companion" class="ghost" title="Open the companion in its own floating window — the palette and seminar list, built to sit beside your chatbot">Companion ↗</button>
+    <span id="companion-controls" hidden>
+      <a id="open-companion-here" href="/companion" title="Open the companion — the palette and seminar list, built to sit beside your chatbot">Companion</a>
+      <button id="open-companion" title="Pop out as a floating window" aria-label="Open the companion as a floating pop-out window">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 2.8H3.2A1.2 1.2 0 0 0 2 4v6.8A1.2 1.2 0 0 0 3.2 12H10a1.2 1.2 0 0 0 1.2-1.2V8"/>
+          <path d="M8.6 2H12v3.4"/>
+          <path d="M12 2 6.8 7.2"/>
+        </svg>
+      </button>
     </span>
     <button id="signout" class="ghost" hidden style="margin-left:.5rem">Sign out</button>
   </div>
@@ -435,12 +453,12 @@
     try { await navigator.clipboard.writeText($("rec-token").textContent); $("rec-copy").textContent = "Copied"; } catch {}
   });
   signout.addEventListener("click", () => showGate());
-  // Two shapes on purpose: the pop-out floats beside a chatbot in a normal
-  // browser; "open here" navigates in place for embedded browser panels
-  // (ChatGPT/Claude desktop apps), where a pop-out would escape the panel.
-  // Either way, clicking seeds the companion's persistent sign-in first so it
-  // arrives authenticated; the postMessage responder below still serves any
-  // popup-opened companion.
+  // One split control, two window shapes: the label navigates in place
+  // (embedded browser panels in the ChatGPT/Claude desktop apps keep the
+  // companion in-panel; a pop-out would escape), the glyph segment floats it
+  // beside a chatbot in a normal browser. Either way, clicking seeds the
+  // companion's persistent sign-in first so it arrives authenticated; the
+  // postMessage responder below still serves any popup-opened companion.
   const seedCompanion = () => {
     if (TOKEN) { try { localStorage.setItem("suminar_token", TOKEN); } catch {} }
   };
