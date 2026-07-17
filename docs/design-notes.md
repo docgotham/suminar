@@ -166,30 +166,108 @@ custody is user discipline, not server enforcement, until B), and an old
 host's window simply won't show turns made elsewhere — the record is the
 complete view (constraint above). Redemptions are one-use and logged.
 
-## Multi-human seminars — Increment B (ratified direction, NOT yet built)
+## Multi-human seminars — Increment B (designed in depth 2026-07-17; DEFERRED — Dave decided not to build)
 
-The same capability-code primitive with a different redeemer: the convener
-mints an **invite** and another account joins the seminar as a human
-participant, addressable by @handle, speaking through their own host. Agents
-already read the whole room; the event stream already interleaves speakers.
-Four open design questions to settle before building:
-1. **Attribution**: participant identity on every event (whose token synced
-   it), rendered distinctly from sources; misattribution in a scholarly
-   record is a harm, not a UI bug. Requires conversation_participants (the
-   conversation_agents pattern generalized) and per-participant tokens —
-   which also delivers token rotation for A retroactively.
-2. **Bidirectional sync**: hosts must RECEIVE others' turns for display
-   (generalizing the 1.0.4 canonical-resupply channel) and render them
-   verbatim, attributed — new display contract + conduct whispers (the
-   failure mode: a host paraphrasing the other human).
-3. **@human addressing is correspondence, not invocation**: async delivery,
-   companion as notifier ("2 turns addressed to you"); no agent-like latency
-   promised. Existing address modes (leading, visible_host, proposals)
-   extend to human targets unchanged.
-4. **Convener semantics**: convener mints/revokes/renames; invocations bill
-   to the invoker (existing per-account metering); exit rights are two-party
-   (convener ends participation; both parties can always export the
-   transcript — every voice owns its leave-ability).
+The direction stays ratified; the build is deliberately deferred. Everything
+below is the resumable state of the design, settled in the 2026-07-17
+discussion (grounded in a kernel read + a dm_sum recon).
+
+The shape: the same capability-code primitive with a different redeemer —
+the convener mints an **invite** and another account joins the seminar as a
+human participant, addressable by @handle, speaking through their own host.
+Agents already read the whole room; the record already interleaves speakers.
+
+**The four open questions, as they converged:**
+1. **Attribution — SETTLED.** Server-stamped from the syncing credential,
+   never host-supplied (today `speakerDisplayName` defaults to "User").
+   Requires conversation_participants (conversation_agents generalized) +
+   per-participant tokens — which retroactively delivers A's missing token
+   rotation/revocation. dm_sum proves the pattern (see porting map).
+2. **Bidirectional sync — DESIGN SETTLED, still the novel/risky build.**
+   Key finding: **adjacency carries causality today, by lock** — the
+   single-flight invocation lock guarantees an answer lands adjacent to its
+   address; two writers dissolve that guarantee, and the sync kernel is
+   strictly single-writer (append at exact head or "gap"; occupied sequence
+   = "history conflict"). B2 therefore means: server-assigned sequences;
+   every canonical answer event gains an explicit **in-reply-to link**
+   (sequence + participant of the address it answers) so causality is
+   written down, not inferred from position; **seat, not mirror** delivery —
+   a host thread is its human's seat at the table, not the room: own
+   exchanges in full, others' activity as *mechanical notices* (names,
+   counts, pointers — never content), verbatim blocks fetched on demand;
+   the companion renders the braid (reply-links as threading cues).
+   Standing principle: **the kernel never paraphrases a human** — a
+   server-side summarizer would be a fourth voice in the room; inventory is
+   arithmetic, understanding happens host-side on request. Conduct layer:
+   "never paraphrase the other human" whispers + eval cases (dm_sum's
+   retelling-style display contract is the opposite doctrine and previews
+   the default host failure mode). Concurrency posture: two scholars are
+   mostly serial; concurrent writes must be SAFE (lock-before-check), not
+   the optimized primary path.
+3. **@human addressing is correspondence, not invocation — unchanged.**
+   Async delivery, companion as notifier; no agent-like latency promised;
+   existing address modes extend to human targets.
+4. **Convener semantics — one open product call remains: join friction.**
+   Invoker-pays (ratified) implies the invitee needs an account + connector
+   before speaking. Recommended resolution: account-required-but-free-to-
+   join, invite doubles as a pilot pass. Exit rights are two-party and
+   **require transcript export to exist** (leave-ability), which makes the
+   queued markdown-export item a B deliverable, not a nice-to-have.
+   Convener mints/revokes/renames; revocation = delete the grant row.
+
+**Room vs desk (shared-seminar sync scope — settled 2026-07-17).** The
+record only ever contains what a host submits; today's instruction is
+"submit every visible turn" (full mirror), which is correct solo (thinking
+aloud *is* the seminar; situatedness is the product) but wrong shared: it
+surveils the other participant's desk, bloats the record (first-invocation
+latency; 500-event/50k caps), and drowns the other seat in notices. Shared
+seminars narrow the instruction to **sync the exchange, not the desk**: an
+@-addressed turn, the answer, the visible follow-up to it, and explicit
+hand-ins ("share this draft with the seminar"). Private host-chat between
+exchanges is never submitted — it doesn't exist server-side. Consequence:
+**addresses must carry their excerpts** (agents read only the record, so a
+question about desk work quotes the passage it references — pages brought
+to the podium); build work is instruction text + a fail-fast error when an
+agent is asked about material the record lacks. Fail-soft both directions:
+over-sync is visible and socially correctable; under-sync costs one agent
+answer and the cure is inlining the excerpt. Solo seminars keep full
+mirror — no regression.
+
+**Rejected alternative (consciously):** per-exchange sub-threads/breakout
+rooms. Kills the shared evidentiary ground — one room, one record is what
+lets @rozado be asked about what @honeycutt just told the other human.
+
+**Porting map (dm_sum recon, 2026-07-17; repo C:\Users\Dave\dm_sum).**
+dm_sum solved participant identity well — port, don't reinvent: seat-first
+participants (rows exist before identity binds, survive departure —
+attribution never dangles); membership row IS access (delete = revoke, the
+whole model); every write re-verifies the (room, participant, account)
+triple in both the handler and the SQL RPC (spoofing structurally
+impossible); owner-only invites, hash-stored, one-use, idempotent claim,
+cap enforced under FOR UPDATE. dm_sum deliberately has NO cursors, NO
+delivery, NO live sync (pull-based time-window activity views) — so B2's
+multi-writer sync has no precedent in either repo. Their hardest-won lesson
+ports anyway: **lock before check, in one global sort order** (their
+check-then-lock race silently lost a write), plus dedupe keys with ON
+CONFLICT DO NOTHING for any fan-out.
+
+### A2 candidate — grant-based continuation credentials (the solo-valuable B1 subset)
+
+The one part of B1 that improves the SINGLE-human architecture on its own,
+buildable standalone and additive (no re-keying; conversations.token stays
+PK): a `conversation_grants` table (hash-at-rest grant tokens, label,
+last_used_at, revoked_at) resolving to the conversation. The MCP layer
+accepts either a legacy raw token (existing threads unaffected) or a grant.
+Resume redemption mints a NEW grant instead of returning the raw token —
+serial custody becomes server-enforceable instead of user discipline,
+closing A's documented scope-honesty gap; the raw token stops traveling.
+Companion seminar page gains "connected hosts" chips (label + last-used +
+revoke) — answering "who can write to this seminar" for the multi-host
+solo workflow that Increment A already created. Events gain grant
+provenance (which host carried which turn) — groundwork for the queued
+provenance panel. Skip seats/invites/attribution-display entirely (dead
+weight without a second human). Status: proposed 2026-07-17, awaiting
+Dave's word.
 
 ## Host over-deliberation: terrain fixes, never disposition fixes
 
