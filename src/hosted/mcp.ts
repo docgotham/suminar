@@ -6,6 +6,8 @@ import type { ResumeSeminarResult } from "../suminar/mcp.js";
 import { createSuminarConversationService } from "../suminar/service.js";
 import { loadConfig } from "../suminar/config.js";
 import { SupabaseStore } from "./supabaseStore.js";
+import { GrantResolvingStore, SupabaseGrantDirectory } from "./grants.js";
+import type { GrantDirectory } from "./grants.js";
 import { SupabaseArtifactReader } from "./supabaseArtifacts.js";
 import { MeteredLocalInvoker } from "./metering.js";
 import { checkHostedRateLimit, hostedRateLimitRules, rateLimitedResponse } from "./ratelimit.js";
@@ -50,7 +52,7 @@ function methodNotAllowed(): Response {
 // the code's owner must be the authenticated account (cross-account
 // participation is increment B, with its own identity model). One-use is
 // enforced with a race-safe conditional update.
-async function redeemResumeCode(client: SupabaseClient, owner: string, code: string): Promise<ResumeSeminarResult | null> {
+async function redeemResumeCode(client: SupabaseClient, owner: string, code: string, grants: GrantDirectory): Promise<ResumeSeminarResult | null> {
   if (!/^smn_res_[a-f0-9]{16,}$/i.test(code)) return null;
   const hash = createHash("sha256").update(code, "utf8").digest("hex");
   const row = await client.from("seminar_resume_codes")
@@ -88,8 +90,18 @@ async function redeemResumeCode(client: SupabaseClient, owner: string, code: str
   const customTitle = conv.data.title as string | null;
   const firstLine = ((firstUser.data as { text?: string } | null)?.text ?? "").replace(/\s+/g, " ").trim();
   const title = customTitle ?? (firstLine ? (firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine) : "Seminar");
+  // A2: the resuming host receives its own revocable grant, not the raw
+  // token (the conversation's unrotatable primary key). Fail open to the
+  // raw token only if minting itself fails — a resume must never break on
+  // its enhancement.
+  let continuation = token;
+  try {
+    continuation = (await grants.mint(token, `Resumed ${new Date().toISOString().slice(0, 10)}`)).grantToken;
+  } catch {
+    // pre-A2 behavior remains the floor
+  }
   return {
-    conversationToken: token,
+    conversationToken: continuation,
     cursor: (conv.data.last_sequence as number) ?? 0,
     title,
     agentHandles: ((agents.data ?? []) as Array<{ agent_ref: { handle?: string } }>)
@@ -131,13 +143,16 @@ export async function handleHostedMcpRequest(request: Request, env: NodeJS.Proce
   // seminar, is the target. Fails open; the invocation quota fails closed.
   const decision = await checkHostedRateLimit(client, hostedRateLimitRules(env).mcpPerAccount, owner);
   if (!decision.allowed) return withCors(rateLimitedResponse(decision, "MCP"));
-  const store = new SupabaseStore(client, owner);
+  // Grants resolve at the store boundary: hosts hold revocable convg_
+  // credentials while the raw conversation token stays server-side.
+  const grants = new SupabaseGrantDirectory(client, owner);
+  const store = new GrantResolvingStore(new SupabaseStore(client, owner), grants);
   const service = createSuminarConversationService(loadConfig(), store, {
     artifactReader: new SupabaseArtifactReader(client),
     wrapLocalInvoker: (invoker) => new MeteredLocalInvoker(invoker, client, owner),
   });
   const server = createSuminarMcpServer(service, {
-    resumeSeminar: (code) => redeemResumeCode(client, owner, code),
+    resumeSeminar: (code) => redeemResumeCode(client, owner, code, grants),
   });
   // JSON response mode is load-bearing: in SSE mode handleRequest resolves
   // before the JSON-RPC reply is written to the stream, so the close() below

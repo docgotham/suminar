@@ -111,6 +111,7 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   if (request.method === "GET" && resource === "seminars" && id && !action) return seminarDetail(client, owner, id, new URL(request.url).searchParams);
   if (request.method === "POST" && resource === "seminars" && id && action === "title") return renameSeminar(client, owner, id, body ?? {});
   if (request.method === "POST" && resource === "seminars" && id && action === "resume-code") return mintResumeCode(client, owner, id);
+  if (request.method === "POST" && resource === "seminars" && id && action === "revoke-grant") return revokeSeminarGrant(client, owner, id, body ?? {});
   if (resource === "syndications") {
     const sub = segments[5];
     if (request.method === "POST" && !id) return mintSyndicationCode(client, owner, body ?? {});
@@ -149,7 +150,7 @@ async function seminarDetail(client: SupabaseClient, owner: string, seminarId: s
   if (!conv.data) return json({ error: "not_found" }, 404);
   const token = conv.data.token as string;
 
-  const [agents, events, lastEvent] = await Promise.all([
+  const [agents, events, lastEvent, grants] = await Promise.all([
     client.from("conversation_agents")
       .select("agent_ref").eq("conversation_token", token).order("created_at", { ascending: true }),
     client.from("conversation_events")
@@ -164,6 +165,11 @@ async function seminarDetail(client: SupabaseClient, owner: string, seminarId: s
       .order("sequence", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    client.from("conversation_grants")
+      .select("id, label, created_at, last_used_at")
+      .eq("conversation_token", token)
+      .is("revoked_at", null)
+      .order("created_at", { ascending: true }),
   ]);
   if (agents.error) return json({ error: "server_error", error_description: agents.error.message }, 500);
   if (events.error) return json({ error: "server_error", error_description: events.error.message }, 500);
@@ -188,7 +194,42 @@ async function seminarDetail(client: SupabaseClient, owner: string, seminarId: s
       agentId: row.agentId ?? null,
       text: row.text ?? "",
     })),
+    // A2: which host threads hold a live continuation grant. Active only —
+    // a revoked grant is a dead credential, not history worth showing.
+    connectedHosts: ((grants.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      id: row.id,
+      label: (row.label as string | null) ?? "Connected host",
+      createdAt: row.created_at,
+      lastUsedAt: row.last_used_at ?? null,
+    })),
   });
+}
+
+// A2: revoke a continuation grant — disconnects that host thread from the
+// seminar without touching the record or any other host's access. The
+// seminar is addressed by its public id; the grant must belong to it.
+async function revokeSeminarGrant(client: SupabaseClient, owner: string, seminarId: string, body: Record<string, unknown>): Promise<Response> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seminarId)) {
+    return json({ error: "invalid_request", error_description: "A valid seminar id is required." }, 400);
+  }
+  const grantId = typeof body.grantId === "string" ? body.grantId.trim() : "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(grantId)) {
+    return json({ error: "invalid_request", error_description: "A valid grantId is required." }, 400);
+  }
+  const conv = await client.from("conversations")
+    .select("token").eq("owner", owner).eq("id", seminarId).maybeSingle();
+  if (conv.error) return json({ error: "server_error", error_description: conv.error.message }, 500);
+  if (!conv.data) return json({ error: "not_found" }, 404);
+  const update = await client.from("conversation_grants")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("id", grantId)
+    .eq("conversation_token", conv.data.token as string)
+    .is("revoked_at", null)
+    .select("id")
+    .maybeSingle();
+  if (update.error) return json({ error: "server_error", error_description: update.error.message }, 500);
+  if (!update.data) return json({ error: "not_found", error_description: "No active grant with that id on this seminar." }, 404);
+  return json({ ok: true, grantId });
 }
 
 // Seminar portability: mint a resume code — short-lived, one-use,

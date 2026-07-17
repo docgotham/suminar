@@ -68,6 +68,11 @@
   button.ghost:hover { border-color: var(--accent); background: transparent; }
   .status { font-size: .8125rem; color: var(--mut); min-height: 1.1rem; margin: .4rem 0 0; }
   .status.err { color: var(--err); }
+  .hostsline { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .15rem 0 .7rem; font-size: .75rem; color: var(--mut); }
+  .hostpill { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid var(--line); border-radius: 999px; padding: .18rem .3rem .18rem .6rem; background: var(--card); color: inherit; }
+  .hostpill .when { color: var(--mut); }
+  .hostpill .revoke { font: inherit; border: 0; background: transparent; color: var(--mut); cursor: pointer; padding: 0 .3rem; border-radius: 999px; }
+  .hostpill .revoke:hover, .hostpill .revoke.confirm { color: var(--err); font-weight: 600; }
 
   .tabs { display: flex; gap: .4rem; margin: .2rem 0 .8rem; border-bottom: 1px solid var(--line); }
   .tab {
@@ -215,6 +220,7 @@
       <button class="ghost" id="sem-resume" type="button" title="Mint a one-use code that continues this seminar in another chat — ChatGPT, Claude, any host with Suminar connected">Continue in another chat…</button>
       <div id="sem-resume-box"></div>
     </div>
+    <div class="hostsline" id="sem-hosts" hidden></div>
     <div id="sem-record"></div>
     <p class="status" id="sem-status" role="status"></p>
   </section>
@@ -477,6 +483,54 @@
     wrap.append(body);
     return wrap;
   }
+  function ago(iso) {
+    const ms = Date.now() - Date.parse(iso);
+    if (!Number.isFinite(ms) || ms < 0) return "";
+    if (ms < 90000) return "just now";
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return mins + "m ago";
+    const hours = Math.round(mins / 60);
+    if (hours < 36) return hours + "h ago";
+    return Math.round(hours / 24) + "d ago";
+  }
+  // A2: the host threads holding a live continuation grant to this seminar.
+  // Revoking one disconnects that chat; the record and every other host are
+  // untouched. Two-click confirm in place, no dialogs. Legacy seminars with
+  // no grants yet show nothing — grants appear with new seminars and resumes.
+  function renderConnectedHosts(hosts) {
+    const line = $("sem-hosts");
+    if (line.querySelector(".revoke.confirm")) return; // don't clobber an armed confirm mid-poll
+    line.replaceChildren();
+    if (!hosts.length) { line.hidden = true; return; }
+    line.hidden = false;
+    line.append(el("span", {}, "Connected chats:"));
+    for (const host of hosts) {
+      const pill = el("span", { class: "hostpill" });
+      pill.append(el("span", {}, host.label || "Connected host"));
+      pill.append(el("span", { class: "when" }, host.lastUsedAt ? ago(host.lastUsedAt) : "unused"));
+      const revoke = el("button", { class: "revoke", type: "button", title: "Disconnect this chat from the seminar — the record stays whole" }, "✕");
+      let armed = false;
+      revoke.addEventListener("click", async () => {
+        if (!armed) {
+          armed = true; revoke.textContent = "revoke?"; revoke.classList.add("confirm");
+          setTimeout(() => { armed = false; revoke.textContent = "✕"; revoke.classList.remove("confirm"); }, 2600);
+          return;
+        }
+        try {
+          await api("/api/account/seminars/" + encodeURIComponent(SEM.id) + "/revoke-grant", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ grantId: host.id }),
+          });
+          pill.remove();
+          if (line.childElementCount <= 1) line.hidden = true;
+        } catch (error) {
+          $("sem-status").textContent = error.message; $("sem-status").className = "status err";
+        }
+      });
+      pill.append(revoke);
+      line.append(pill);
+    }
+  }
   function updateSeminarTitle() {
     const named = Boolean(SEM.meta && SEM.meta.title);
     const titleEl = $("sem-title");
@@ -506,6 +560,7 @@
       for (const participant of body.participants || []) {
         if (participant.handle) chips.append(handleChip(participant.handle));
       }
+      renderConnectedHosts(body.connectedHosts || []);
       $("sem-status").textContent = SEM.lastSeq === 0 ? "No visible turns in this seminar yet." : "";
       $("sem-status").className = "status";
       if ((body.events || []).length && nearBottom) window.scrollTo(0, document.body.scrollHeight);
@@ -523,6 +578,8 @@
     $("sem-title").textContent = "…";
     $("sem-title").classList.remove("derived");
     $("sem-chips").replaceChildren();
+    $("sem-hosts").replaceChildren();
+    $("sem-hosts").hidden = true;
     $("sem-live").hidden = true;
     $("sem-status").textContent = "";
     $("tabs").hidden = true;

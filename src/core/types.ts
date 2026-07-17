@@ -147,6 +147,9 @@ export interface ConversationEvent {
   invocationId?: string;
   maxDirectQuoteWords?: number;
   responseEnvelope?: ResponseEnvelope;
+  // Provenance: the continuation grant that carried this event into the
+  // record (absent for raw-token and local-kernel events).
+  viaGrantId?: string;
 }
 
 export interface ConversationTranscriptMessage {

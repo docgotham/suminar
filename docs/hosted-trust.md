@@ -72,6 +72,18 @@ keys, which are agent custody) is exportable by its owner at any time, and
 each export writes an owner-visible audit row before anything is released.
 Deleting a document removes its rows and its stored objects.
 
+## Seminars travel by revocable grant
+
+A seminar's record belongs to your account, not to the host chat that
+happens to be showing it. Each connected chat holds a continuation grant — a
+revocable credential stored only as a hash — that resolves to the seminar on
+our side; the record's own internal key never leaves the server. Continuing
+a seminar in another chat mints a new grant for that chat, so you can see
+every chat currently connected to a seminar and disconnect any one of them
+without touching the record or the others. A grant only ever reaches the
+account that owns the seminar; one account can never resolve, read, or revoke
+another's.
+
 ## No client analytics
 
 Hosted Suminar pages ship no analytics scripts.
