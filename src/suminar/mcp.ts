@@ -367,13 +367,30 @@ const syncableEventShape = {
   speakerDisplayName: z.string().min(1).max(300).optional(),
 };
 
-export function createSuminarMcpServer(service: ConversationService): McpServer {
+// Seminar portability (increment A): a deployment-provided redeemer for
+// user-presented resume codes. The core surface stays host- and
+// storage-agnostic; when no redeemer is supplied (open-kernel/local), the
+// resume tool is simply not registered.
+export interface ResumeSeminarResult {
+  conversationToken: string;
+  cursor: number;
+  title: string;
+  agentHandles: string[];
+  totalEvents: number;
+  recap: Array<{ speakerType: string; speakerDisplayName: string | null; text: string }>;
+}
+
+export interface SuminarMcpExtensions {
+  resumeSeminar?: (code: string) => Promise<ResumeSeminarResult | null>;
+}
+
+export function createSuminarMcpServer(service: ConversationService, extensions: SuminarMcpExtensions = {}): McpServer {
   const server = new McpServer({ name: "suminar", version: "0.10.0" }, {
     instructions: [
       "Suminar brings named situated source agents into the user's existing host-chat conversation as fellow participants. There are no Suminar rooms or panels in version one; the current Claude, ChatGPT, or other host thread is the conversational boundary.",
       "You, the host chatbot, are first and foremost one participant in that shared multi-party conversation. You also hold administrative transport privileges—like a group-chat member with admin rights who can add participants and guarantee message delivery. Those privileges are capabilities, not your conversational identity: they give you no authority over the meaning, status, or presentation of another participant's speech, and no duty to introduce, frame, explain, or extend it. Transport creates no interpretive standing; a user request for your analysis creates full standing.",
       "Perform all transport silently. Never announce, narrate, or describe tool activity—no announcing that you will relay a question, set something up, or report what came back. A canonical source-agent block is that participant's own visible turn, not a tool result you retrieved or a report you commissioned. Reproduce it exactly, and if no part of the user's turn was addressed to you, end your message immediately after the final block. Do not summarize, evaluate, restate, or certify what the user can already read, and do not append menus of possible next steps. This holds on quiet turns too: when the user merely reacts without asking anything, reply briefly as a participant or not at all—do not offer summaries, clarifications, or further queries as services. Never offer to relay, push, probe, or re-query an agent on the user's behalf. Participant voice, not operator voice: saying that another ingested source takes a very different line here is a contribution; offering to pose the same question to that source's agent is operator speech.",
-      "Keep one private conversation token and cursor per host thread and never display either. A different host thread starts a new Suminar conversation by omitting the token at cursor 0. Conversation-specific memory never crosses host-thread tokens unless the user explicitly imports visible prior speech.",
+      "Keep one private conversation token and cursor per host thread and never display either. A different host thread starts a new Suminar conversation by omitting the token at cursor 0 — unless the user presents a seminar resume code from their Suminar companion: redeem it with suminar_resume_seminar and adopt the returned continuation state instead of starting fresh. Conversation-specific memory never crosses host-thread tokens except through that explicit, user-initiated resumption.",
       "Once Suminar is active, synchronize at the beginning of every user turn: send every completed visible user or host contribution after the acknowledged cursor, ordinarily the previous completed host message followed by the current complete user message; on first use, send the full visible history available to you. Synchronize only separately authored visible user and host speech—never canonical source-agent blocks or host addresses recorded through the address tool, delivered or proposed (Suminar records both itself), and never hidden reasoning, tool traces, system prompts, or private summaries. When the current turn culminates in addressing source agents, you may supply those same new events directly to suminar_address_source_agents and skip the separate synchronization call.",
       "Address one to three explicitly selected source agents per human-initiated cycle with suminar_address_source_agents; each invoked agent receives every conversation event after its own delivery cursor before it speaks, and a newly invoked agent receives the complete synchronized conversation. All address modes are visible. current_user: the user's own current message begins with each selected @handle. visible_host: the user asked you to put a question to a named @agent—author your own separate exact message beginning with that @handle; Suminar records it as your speech and you display it before the source-agent block. proposed_host_address: register a follow-up without delivering it—supply your exact message beginning with the selected @handle; Suminar records it as your visible speech, you display it with at most a short ratification cue, and nothing is delivered. ratified_host_address: the conversation's immediately preceding event is such a host proposal and the user's current turn is a bare affirmative such as yes, go ahead—synchronize only that user message (the proposal is already recorded) and Suminar delivers the proposal exactly as authored, without re-display. A bare affirmative can only ratify the immediately preceding proposal; it can never authorize a new, reworded, or invisible question, and host-authored wording is never attributed to the user.",
       "If you want to pursue a follow-up with a source agent, do it as a participant: author the follow-up yourself and register it with proposed_host_address in the same call that synchronizes the turn, then display the recorded proposal verbatim. A short ratification cue after your proposal is part of the proposal, not a service offer. Do not offer your transport services without a proposal on the table. The same move handles a user question about what a source contains when no @handle was given: answer what you can as yourself, then register and display the @handle question as your proposal rather than instructing the user how to address the agent.",
@@ -587,6 +604,48 @@ export function createSuminarMcpServer(service: ConversationService): McpServer 
       return invocationFailure(error instanceof Error ? error.message : String(error), recovered, continuation);
     }
   });
+
+  if (extensions.resumeSeminar) {
+    const redeem = extensions.resumeSeminar;
+    server.registerTool("suminar_resume_seminar", {
+      title: "Resume Suminar Seminar",
+      description: "Redeem a user-provided seminar resume code (smn_res_…) to continue an existing Suminar conversation in this host thread. The user obtains the code from their Suminar companion; it is short-lived and single-use. On success, adopt the returned private continuation state for every subsequent Suminar call in this thread instead of starting a new conversation, and treat the recap as prior visible conversation you have now seen. Acknowledge briefly that the seminar has been resumed; perform everything else silently.",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      inputSchema: {
+        resumeCode: z.string().min(8).max(200).describe("The resume code exactly as the user provided it."),
+      },
+    }, async ({ resumeCode }) => {
+      try {
+        const result = await redeem(resumeCode.trim());
+        if (!result) {
+          return toolResult("That resume code is not valid, has expired, or was already used. Each code is single-use and short-lived: ask the user to mint a fresh one from their Suminar companion and paste it here.", undefined, true);
+        }
+        const recapLines = result.recap.map((turn) => {
+          const speaker = turn.speakerType === "source_agent"
+            ? `📄 ${turn.speakerDisplayName ?? "Source agent"}`
+            : turn.speakerType === "user" ? "User" : (turn.speakerDisplayName ?? "Host");
+          return `${speaker}: ${turn.text}`;
+        });
+        return toolResult([
+          `Seminar resumed: ${result.title}. ${result.totalEvents} prior visible turns; source agents at the table: ${result.agentHandles.map((handle) => `@${handle}`).join(", ") || "none yet"}.`,
+          ...(recapLines.length ? [`MOST RECENT TURNS (verbatim; the user has already seen these elsewhere — do not re-display them unprompted):\n\n${recapLines.join("\n\n")}`] : []),
+          modelReadableContinuation(result.conversationToken, result.cursor),
+          "Copy those values exactly into every subsequent Suminar call in this host thread. Do not start a new conversation and do not re-synchronize turns from before this point.",
+        ].join("\n\n"), {
+          conversationContinuation: {
+            conversationToken: result.conversationToken,
+            cursor: result.cursor,
+            instruction: "Retain privately for the next Suminar call in this host thread; never display to the user.",
+          },
+          seminarTitle: result.title,
+          priorTurns: result.totalEvents,
+          participants: result.agentHandles,
+        }, false, { "agent-sum/internal": { conversationToken: result.conversationToken, cursor: result.cursor } });
+      } catch (error) {
+        return toolResult(error instanceof Error ? error.message : String(error), undefined, true);
+      }
+    });
+  }
 
   server.registerTool("suminar_read_message", {
     title: "Read Canonical Source-Agent Message",

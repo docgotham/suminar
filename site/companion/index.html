@@ -108,8 +108,12 @@
   .backbtn:hover { background: none; color: var(--accent-deep); }
   .seminartitle { font-weight: 700; font-size: .9375rem; flex: 1 1 auto; min-width: 0; }
   .seminartitle.derived { font-weight: 400; font-style: italic; }
-  .semchips { display: flex; flex-wrap: wrap; gap: .3rem .35rem; margin: 0 0 .8rem; }
+  .semchips { display: flex; flex-wrap: wrap; gap: .3rem .35rem; margin: 0 0 .55rem; }
   .semchips .handlechip { margin-top: 0; }
+  .resumeline { margin: 0 0 .8rem; }
+  .resumeline button.ghost { font-size: .75rem; padding: .25rem .6rem; }
+  .resumeline .handlechip { margin-top: .4rem; }
+  .resumeline .status { margin-top: .25rem; }
   .turn { padding: .55rem 0 .55rem .6rem; border-bottom: 1px solid var(--line); }
   .turn.source_agent { background: color-mix(in srgb, var(--accent-tint) 35%, transparent); border-left: 3px solid var(--accent); border-radius: 4px; margin: .3rem 0; }
   .turnhead { display: flex; align-items: baseline; gap: .5rem; font-size: .71875rem; color: var(--mut); min-width: 0; }
@@ -194,6 +198,10 @@
       <button class="renamebtn" id="sem-rename" type="button" title="Rename seminar">✎</button>
     </div>
     <div class="semchips" id="sem-chips"></div>
+    <div class="resumeline">
+      <button class="ghost" id="sem-resume" type="button" title="Mint a one-use code that continues this seminar in another chat — ChatGPT, Claude, any host with Suminar connected">Continue in another chat…</button>
+      <div id="sem-resume-box"></div>
+    </div>
     <div id="sem-record"></div>
     <p class="status" id="sem-status" role="status"></p>
   </section>
@@ -514,6 +522,36 @@
     setTab(tab);
   }
   $("sem-back").addEventListener("click", () => { location.hash = ""; });
+  // Portability: mint a one-use resume code and hand back a paste-ready line.
+  // The click copies the WHOLE line ("Suminar: resume seminar with code …"),
+  // so carrying a seminar to another host is paste-and-go.
+  $("sem-resume").addEventListener("click", async () => {
+    if (!SEM.id) return;
+    $("sem-resume").disabled = true;
+    try {
+      const body = await api("/api/account/seminars/" + encodeURIComponent(SEM.id) + "/resume-code", {
+        method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+      });
+      const box = $("sem-resume-box");
+      box.replaceChildren();
+      const codeChip = el("button", { class: "handlechip", type: "button", title: "Click to copy a paste-ready line" }, body.code);
+      codeChip.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText("Suminar: resume seminar with code " + body.code);
+          const prior = codeChip.textContent;
+          codeChip.textContent = "✓ copied — paste into the other chat";
+          codeChip.classList.add("copied");
+          setTimeout(() => { codeChip.textContent = prior; codeChip.classList.remove("copied"); }, 1600);
+        } catch {}
+      });
+      box.append(codeChip);
+      box.append(el("div", { class: "status" }, "Single use, expires in 1 hour. Click the code to copy a paste-ready line for any chat where Suminar is connected."));
+    } catch (error) {
+      $("sem-status").textContent = error.message; $("sem-status").className = "status err";
+    } finally {
+      $("sem-resume").disabled = false;
+    }
+  });
   $("sem-rename").addEventListener("click", () => {
     if (!SEM.id) return;
     const titleEl = $("sem-title");

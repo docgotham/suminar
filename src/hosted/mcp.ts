@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSuminarMcpServer } from "../suminar/mcp.js";
+import type { ResumeSeminarResult } from "../suminar/mcp.js";
 import { createSuminarConversationService } from "../suminar/service.js";
 import { loadConfig } from "../suminar/config.js";
 import { SupabaseStore } from "./supabaseStore.js";
@@ -42,6 +45,65 @@ function methodNotAllowed(): Response {
   );
 }
 
+// Seminar portability (increment A): redeem a resume code for the SAME
+// conversation's continuation state plus a bounded recap. Self-resume only —
+// the code's owner must be the authenticated account (cross-account
+// participation is increment B, with its own identity model). One-use is
+// enforced with a race-safe conditional update.
+async function redeemResumeCode(client: SupabaseClient, owner: string, code: string): Promise<ResumeSeminarResult | null> {
+  if (!/^smn_res_[a-f0-9]{16,}$/i.test(code)) return null;
+  const hash = createHash("sha256").update(code, "utf8").digest("hex");
+  const row = await client.from("seminar_resume_codes")
+    .select("id, conversation_token, owner, expires_at, used_at")
+    .eq("code_hash", hash).maybeSingle();
+  if (row.error || !row.data) return null;
+  if (row.data.owner !== owner) return null;
+  if (row.data.used_at) return null;
+  if (Date.parse(row.data.expires_at as string) < Date.now()) return null;
+  const marked = await client.from("seminar_resume_codes")
+    .update({ used_at: new Date().toISOString() })
+    .eq("id", row.data.id).is("used_at", null)
+    .select("id").maybeSingle();
+  if (marked.error || !marked.data) return null;
+
+  const token = row.data.conversation_token as string;
+  const conv = await client.from("conversations")
+    .select("title, last_sequence").eq("token", token).eq("owner", owner).maybeSingle();
+  if (conv.error || !conv.data) return null;
+  const [agents, tail, firstUser] = await Promise.all([
+    client.from("conversation_agents").select("agent_ref").eq("conversation_token", token).order("created_at", { ascending: true }),
+    client.from("conversation_events")
+      .select("sequence, speakerType:event->>speakerType, speakerDisplayName:event->>speakerDisplayName, text:event->>authoredMessage")
+      .eq("conversation_token", token)
+      .order("sequence", { ascending: false })
+      .limit(8),
+    client.from("conversation_events")
+      .select("text:event->>authoredMessage")
+      .eq("conversation_token", token)
+      .eq("event->>speakerType", "user")
+      .order("sequence", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const customTitle = conv.data.title as string | null;
+  const firstLine = ((firstUser.data as { text?: string } | null)?.text ?? "").replace(/\s+/g, " ").trim();
+  const title = customTitle ?? (firstLine ? (firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine) : "Seminar");
+  return {
+    conversationToken: token,
+    cursor: (conv.data.last_sequence as number) ?? 0,
+    title,
+    agentHandles: ((agents.data ?? []) as Array<{ agent_ref: { handle?: string } }>)
+      .map((entry) => entry.agent_ref?.handle ?? "")
+      .filter(Boolean),
+    totalEvents: (conv.data.last_sequence as number) ?? 0,
+    recap: ((tail.data ?? []) as Array<Record<string, unknown>>).reverse().map((entry) => ({
+      speakerType: String(entry.speakerType ?? ""),
+      speakerDisplayName: (entry.speakerDisplayName as string | null) ?? null,
+      text: String(entry.text ?? "").slice(0, 1500),
+    })),
+  };
+}
+
 // The hosted Suminar MCP endpoint. Each request is authenticated to an owning
 // account, then served by a fresh stateless MCP server whose store and
 // artifacts are scoped to that account. The service-role client bypasses RLS,
@@ -74,7 +136,9 @@ export async function handleHostedMcpRequest(request: Request, env: NodeJS.Proce
     artifactReader: new SupabaseArtifactReader(client),
     wrapLocalInvoker: (invoker) => new MeteredLocalInvoker(invoker, client, owner),
   });
-  const server = createSuminarMcpServer(service);
+  const server = createSuminarMcpServer(service, {
+    resumeSeminar: (code) => redeemResumeCode(client, owner, code),
+  });
   // JSON response mode is load-bearing: in SSE mode handleRequest resolves
   // before the JSON-RPC reply is written to the stream, so the close() below
   // tears the stream down and a conformant client sees an empty body and

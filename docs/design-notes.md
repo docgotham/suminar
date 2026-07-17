@@ -127,6 +127,70 @@ Show all"); typing always searches the whole shelf. Future recency upgrade:
 order by last-invoked rather than last-uploaded once usage data is worth
 reading.
 
+## STANDING CONSTRAINT: platform-agnosticism (Dave, 2026-07-16)
+
+Every Suminar product surface must be agnostic to proprietary chat platforms.
+**Hosts are viewports and conduits; the seminar record is the durable,
+first-class artifact, and it belongs to the account, not to any host.** A
+user must be able to (a) continue one seminar across different hosts
+(ChatGPT today, Claude tomorrow), (b) take every seminar with them if they
+abandon a platform entirely, and (c) trust that nothing durable lives only
+inside a host. Already true for sources, agents, identity, the record, and
+the companion; the one violation is the conversation continuation token
+living in a single host's working memory. Corollaries: transcript export is
+a *principle* (leave-ability covers conversations, not just documents), and
+no future feature may store anything durable host-side.
+
+## Seminar portability — Increment A (SHIPPED 1.0.38, 2026-07-16)
+
+**Resume codes**: the companion's seminar page mints a short-lived, one-use,
+hash-at-rest code (the invite/syndication pattern). The user pastes it into
+any host ("Suminar: resume seminar with code XYZ"); a new MCP tool
+`suminar_resume_seminar` redeems it and returns the conversation's
+continuation state (token + cursor, standard private-continuation format)
+plus a **recap payload** — a bounded verbatim tail of the record with turn
+counts — so the resuming host knows where the discussion stands (agents need
+nothing; they already read the room server-side). The MCP instructions'
+boundary doctrine gains one amendment: a different host thread starts a new
+conversation *unless the user presents a resume code*. Portability happens
+by explicit user action carrying a visible code — never hidden linkage —
+matching the explicit-@handle philosophy. The same primitive repairs
+fragmentation: resuming INTO a seminar from the same host stitches a
+token-dropped fork back to its record.
+
+**Scope honesty for A:** redemption returns the *same* conversation token
+(no rotation): conversations are keyed by token as primary key, so rotation
+means a per-participant grants table — which Increment B needs anyway for
+identity. Consequence: after a resume, both hosts hold valid tokens (serial
+custody is user discipline, not server enforcement, until B), and an old
+host's window simply won't show turns made elsewhere — the record is the
+complete view (constraint above). Redemptions are one-use and logged.
+
+## Multi-human seminars — Increment B (ratified direction, NOT yet built)
+
+The same capability-code primitive with a different redeemer: the convener
+mints an **invite** and another account joins the seminar as a human
+participant, addressable by @handle, speaking through their own host. Agents
+already read the whole room; the event stream already interleaves speakers.
+Four open design questions to settle before building:
+1. **Attribution**: participant identity on every event (whose token synced
+   it), rendered distinctly from sources; misattribution in a scholarly
+   record is a harm, not a UI bug. Requires conversation_participants (the
+   conversation_agents pattern generalized) and per-participant tokens —
+   which also delivers token rotation for A retroactively.
+2. **Bidirectional sync**: hosts must RECEIVE others' turns for display
+   (generalizing the 1.0.4 canonical-resupply channel) and render them
+   verbatim, attributed — new display contract + conduct whispers (the
+   failure mode: a host paraphrasing the other human).
+3. **@human addressing is correspondence, not invocation**: async delivery,
+   companion as notifier ("2 turns addressed to you"); no agent-like latency
+   promised. Existing address modes (leading, visible_host, proposals)
+   extend to human targets unchanged.
+4. **Convener semantics**: convener mints/revokes/renames; invocations bill
+   to the invoker (existing per-account metering); exit rights are two-party
+   (convener ends participation; both parties can always export the
+   transcript — every voice owns its leave-ability).
+
 ## Host over-deliberation: terrain fixes, never disposition fixes
 
 **The incident (2026-07-14, live seminar):** the host described an @handle

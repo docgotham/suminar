@@ -110,6 +110,7 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   if (request.method === "GET" && resource === "seminars" && !id) return listSeminars(client, owner);
   if (request.method === "GET" && resource === "seminars" && id && !action) return seminarDetail(client, owner, id, new URL(request.url).searchParams);
   if (request.method === "POST" && resource === "seminars" && id && action === "title") return renameSeminar(client, owner, id, body ?? {});
+  if (request.method === "POST" && resource === "seminars" && id && action === "resume-code") return mintResumeCode(client, owner, id);
   if (resource === "syndications") {
     const sub = segments[5];
     if (request.method === "POST" && !id) return mintSyndicationCode(client, owner, body ?? {});
@@ -188,6 +189,28 @@ async function seminarDetail(client: SupabaseClient, owner: string, seminarId: s
       text: row.text ?? "",
     })),
   });
+}
+
+// Seminar portability: mint a resume code — short-lived, one-use,
+// hash-at-rest, shown exactly once. Pasting it into any host carries the
+// seminar there (suminar_resume_seminar redeems it); the same move stitches
+// a token-dropped fork back to its record.
+async function mintResumeCode(client: SupabaseClient, owner: string, seminarId: string): Promise<Response> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seminarId)) {
+    return json({ error: "invalid_request", error_description: "A valid seminar id is required." }, 400);
+  }
+  const conv = await client.from("conversations")
+    .select("token").eq("owner", owner).eq("id", seminarId).maybeSingle();
+  if (conv.error) return json({ error: "server_error", error_description: conv.error.message }, 500);
+  if (!conv.data) return json({ error: "not_found" }, 404);
+  const code = `smn_res_${randomBytes(12).toString("hex")}`;
+  const insert = await client.from("seminar_resume_codes").insert({
+    code_hash: sha256Hex(code),
+    conversation_token: conv.data.token as string,
+    owner,
+  }).select("id, expires_at").single();
+  if (insert.error) return json({ error: "server_error", error_description: insert.error.message }, 500);
+  return json({ seminarId, code, expiresAt: insert.data.expires_at }, 201);
 }
 
 // Rename a seminar: explicit wins, the standing rule. An empty title clears
