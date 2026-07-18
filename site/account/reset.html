@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reset your password — Suminar</title>
+<meta name="description" content="Choose a new password for your Suminar account.">
+<meta name="robots" content="noindex">
+<!-- The recovery token rides in the query; never send it in a Referer, even
+     to our own subresources. Belt-and-braces with the replaceState strip. -->
+<meta name="referrer" content="no-referrer">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f2">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1226">
+<style>
+  @font-face {
+    font-family: 'Instrument Sans';
+    font-style: normal; font-weight: 400 700; font-display: swap;
+    src: url(/fonts/InstrumentSans-var.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  :root {
+    --accent: #2b46c8; --accent-deep: #1a2a6e; --accent-tint: #e9eefb;
+    --accent-contrast: #10142a; --paper: #f7f7f2; --mut: #5c6070;
+    --line: #dfe0d9; --card: #ffffff; --err: #b4232c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #5570e8; --accent-deep: #8095ee; --accent-tint: #141a38;
+      --accent-contrast: #e6e7ef; --paper: #0e1226; --mut: #9aa0b5;
+      --line: #232946; --card: #131834; --err: #f07880;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--paper); color: var(--accent-contrast);
+    font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif; line-height: 1.55;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  header { border-bottom: 1px solid var(--line); }
+  .nav { max-width: 34rem; margin: 0 auto; padding: 1.1rem 1.25rem; }
+  .lockup { display: inline-flex; align-items: center; gap: .6rem; text-decoration: none; color: inherit; }
+  .wordmark { font-weight: 700; font-size: 1.25rem; letter-spacing: -0.02em; }
+  .wordmark .dot { color: var(--accent); }
+  main { flex: 1; width: 100%; max-width: 34rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.6rem; letter-spacing: -0.01em; margin: 0 0 .5rem; }
+  .sub { color: var(--mut); font-size: .9375rem; margin: 0 0 1.5rem; }
+  label { display: block; font-size: .8125rem; font-weight: 600; margin: .9rem 0 .3rem; }
+  input {
+    width: 100%; font: inherit; font-size: .9063rem; color: var(--accent-contrast);
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: .55rem .75rem;
+  }
+  input::placeholder { color: var(--mut); }
+  button {
+    font: inherit; font-size: .875rem; font-weight: 600;
+    background: var(--accent); color: var(--paper); border: 0; border-radius: 4px;
+    padding: .5rem 1rem; cursor: pointer;
+  }
+  button:hover { background: var(--accent-deep); }
+  button:disabled { opacity: .6; cursor: default; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+    padding: 1.25rem 1.4rem 1.35rem;
+  }
+  .status { font-size: .875rem; color: var(--mut); margin: 1rem 0 0; }
+  .status.err { color: var(--err); }
+  .status.ok { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="nav">
+      <a class="lockup" href="/"><span class="wordmark">Sum<span class="dot">·</span>inar</span></a>
+    </div>
+  </header>
+  <main>
+    <h1>Reset your password</h1>
+
+    <!-- The happy path: a valid link lands here with a token in the query. -->
+    <div class="card" id="form-card" hidden>
+      <p class="sub" style="margin-bottom:0">Choose a new password for your Suminar
+      account. This link works once.</p>
+      <label for="pw-new">New password</label>
+      <input id="pw-new" type="password" autocomplete="new-password" placeholder="At least 8 characters">
+      <label for="pw-confirm">Confirm new password</label>
+      <input id="pw-confirm" type="password" autocomplete="new-password">
+      <div style="margin-top: 1.1rem"><button id="pw-set">Set new password</button></div>
+      <p class="status" id="status" role="status"></p>
+    </div>
+
+    <!-- No token in the URL: the link was incomplete or hand-typed. -->
+    <div class="card" id="no-token" hidden>
+      <p class="sub" style="margin:0">This reset link is incomplete. Request a fresh
+      one from the <a href="/account/">sign-in page</a> — open “Forgot your
+      password?” and enter your email.</p>
+    </div>
+
+    <!-- Done: the password is set; send them to sign in. -->
+    <div class="card" id="done" hidden>
+      <p class="status ok" style="margin:0">Your new password is set.</p>
+      <p class="sub" style="margin:.6rem 0 0">You can now <a href="/account/">sign in</a>
+      with it. For safety, your other browser sessions and connected hosts were
+      signed out and will need to reconnect. Any connector tokens you created
+      still work — review them in your account if you're concerned.</p>
+    </div>
+  </main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  function setStatus(message, kind) {
+    const node = $("status");
+    node.className = "status" + (kind ? " " + kind : "");
+    node.textContent = message || "";
+  }
+
+  // The recovery token rides in the query (?token_hash=…&type=recovery). Read
+  // it into memory, then strip it from the address bar so it does not linger
+  // in history or in a shared screenshot — it never needs to be visible.
+  const params = new URLSearchParams(location.search);
+  const TOKEN_HASH = params.get("token_hash") || "";
+  if (location.search) history.replaceState({}, "", location.pathname);
+
+  if (TOKEN_HASH) {
+    $("form-card").hidden = false;
+  } else {
+    $("no-token").hidden = false;
+  }
+
+  async function submit() {
+    const next = $("pw-new").value;
+    const confirm = $("pw-confirm").value;
+    if (next.length < 8) return setStatus("Use at least 8 characters.", "err");
+    if (next !== confirm) return setStatus("The two entries don't match.", "err");
+    setStatus("Setting your password…");
+    $("pw-set").disabled = true;
+    try {
+      const res = await fetch("/api/account/reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tokenHash: TOKEN_HASH, password: next }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        $("pw-set").disabled = false;
+        return setStatus(body.error_description || "The password could not be set.", "err");
+      }
+      // Clear the fields and swap the form for the done panel.
+      $("pw-new").value = ""; $("pw-confirm").value = "";
+      $("form-card").hidden = true;
+      $("done").hidden = false;
+    } catch {
+      $("pw-set").disabled = false;
+      setStatus("Could not reach the server. Try again.", "err");
+    }
+  }
+
+  $("pw-set").addEventListener("click", submit);
+  $("pw-confirm").addEventListener("keydown", (event) => { if (event.key === "Enter") submit(); });
+</script>
+</body>
+</html>

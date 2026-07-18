@@ -263,6 +263,48 @@ export async function signInWithPassword(config: HostedOAuthEnv, email: string, 
   }
 }
 
+// Ask GoTrue to send a password-recovery email. The message carries a hashed,
+// single-use recovery token; Suminar's custom "Reset Password" template builds
+// a link back to /account/reset with {{ .TokenHash }}, which
+// verifyRecoveryToken consumes. GoTrue answers 200 for unknown addresses too,
+// so this leaks nothing about who has an account — and the caller returns an
+// indistinct message either way. Best-effort: a false return (network, SMTP)
+// still yields the same user-facing answer, so nothing here is a signal.
+export async function requestPasswordRecovery(config: HostedOAuthEnv, email: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${config.supabaseUrl}/auth/v1/recover`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: config.serviceRoleKey },
+      body: JSON.stringify({ email }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Consume a recovery token_hash from the reset link and return the owning user
+// id, or null if the token is unknown, expired, or already spent. GoTrue marks
+// the token used on the first success, so this is single-use: a double-click,
+// a refresh, or a link-scanner that re-POSTs all fail closed. The password is
+// then set separately with the service-role admin API, mirroring
+// changePassword — this only proves who is on the other end of the link.
+export async function verifyRecoveryToken(config: HostedOAuthEnv, tokenHash: string): Promise<string | null> {
+  try {
+    const response = await fetch(`${config.supabaseUrl}/auth/v1/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: config.serviceRoleKey },
+      body: JSON.stringify({ type: "recovery", token_hash: tokenHash }),
+    });
+    if (!response.ok) return null;
+    const payload = await response.json().catch(() => null) as { user?: { id?: unknown } } | null;
+    const userId = payload?.user?.id;
+    return typeof userId === "string" && userId.length > 0 ? userId : null;
+  } catch {
+    return null;
+  }
+}
+
 async function authorizeSubmit(request: Request, client: HostedOAuthClient, config: HostedOAuthEnv): Promise<Response> {
   const form = await request.formData();
   const params = new URLSearchParams();

@@ -3,8 +3,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   createHostedOAuthClient,
   readHostedOAuthEnv,
+  requestPasswordRecovery,
   resolveBearerOwner,
   signInWithPassword,
+  verifyRecoveryToken,
   type HostedOAuthEnv,
 } from "./oauth.js";
 import { PILOT_LIMITS, isPilotLimitMessage } from "./limits.js";
@@ -103,6 +105,75 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
       .single();
     if (inserted.error) return json({ error: "server_error", error_description: "Could not start a session." }, 500);
     return json({ sessionToken, expiresAt: inserted.data.expires_at }, 201);
+  }
+
+  // Forgot-password: send a reset link. Unauthenticated by nature — the whole
+  // point is that the account holder cannot sign in — so it sits ahead of the
+  // bearer wall. Per-IP gated so it can't be aimed at someone's inbox, and it
+  // answers the same whether or not the email has an account: it enumerates
+  // nothing.
+  if (request.method === "POST" && resource === "recover" && !id) {
+    const decision = await checkHostedRateLimit(client, rules.recoverPerIp, clientIpFromHeaders(request.headers));
+    if (!decision.allowed) return withCors(rateLimitedResponse(decision, "recover"));
+    const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
+    const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+    if (!EMAIL_PATTERN.test(email) || email.length > 320) {
+      return json({ error: "invalid_request", error_description: "Enter a valid email address." }, 400);
+    }
+    await requestPasswordRecovery(config, email);
+    return json({ ok: true, message: "If that email has a Suminar account, a reset link is on its way." });
+  }
+
+  // Complete a reset: the token_hash from the emailed link is the proof of
+  // identity — there is no bearer, so this is pre-gate too. Validate the new
+  // password BEFORE spending the token (a bad password must not burn a
+  // single-use link), verify the token, set the password with the admin API,
+  // then revoke every web session for that user. A reset ends all old
+  // sessions with no exception — unlike change-password, there is no current
+  // tab to spare, and a reset is the response to a lost credential.
+  if (request.method === "POST" && resource === "reset" && !id) {
+    const decision = await checkHostedRateLimit(client, rules.oauthTokenPerIp, clientIpFromHeaders(request.headers));
+    if (!decision.allowed) return withCors(rateLimitedResponse(decision, "reset"));
+    const payload = await request.json().catch(() => ({})) as Record<string, unknown>;
+    const tokenHash = typeof payload.tokenHash === "string" ? payload.tokenHash.trim() : "";
+    const password = typeof payload.password === "string" ? payload.password : "";
+    if (password.length < 8 || password.length > 200) {
+      return json({ error: "invalid_request", error_description: "The new password must be 8 to 200 characters." }, 400);
+    }
+    const badLink = () => json({ error: "invalid_token", error_description: "This reset link is invalid or has expired. Request a new one." }, 400);
+    if (!/^[A-Za-z0-9._-]{16,512}$/.test(tokenHash)) return badLink();
+    const userId = await verifyRecoveryToken(config, tokenHash);
+    if (!userId) return badLink();
+    const updated = await client.auth.admin.updateUserById(userId, { password });
+    if (updated.error) {
+      // The token was already spent by verifyRecoveryToken, so a rejection
+      // here (a project policy stricter than the 8-char floor: a higher
+      // minimum, or leaked-password protection) can't be retried on this
+      // link. When the failure is the password itself, say so plainly and
+      // send them to a fresh link rather than an opaque 500 — so they don't
+      // burn more links to the same rejected value. Anything else is a real
+      // server fault.
+      const reason = (updated.error.message || "").toLowerCase();
+      const passwordPolicy = reason.includes("password") || reason.includes("weak") || reason.includes("pwned") || reason.includes("leaked");
+      if (passwordPolicy) {
+        return json({ error: "weak_password", error_description: "That password wasn't accepted — it may be too common or below the policy. Request a new link and choose a different one." }, 400);
+      }
+      return json({ error: "server_error", error_description: "The password could not be updated." }, 500);
+    }
+    // A reset is the lost-credential path, so it ends every session-like
+    // credential for the account: browser sessions AND connected-host OAuth
+    // tokens, whose refresh tokens otherwise auto-renew for 30 days — leaving
+    // them alive would leave the door open on the one action meant to shut it.
+    // Connector tokens are deliberate, individually-revocable app passwords
+    // with their own controls and are left intact; the reset page says exactly
+    // that rather than overclaiming a total sign-out.
+    await Promise.all([
+      client.from("web_sessions").update({ revoked_at: new Date().toISOString() })
+        .eq("user_id", userId).is("revoked_at", null),
+      client.from("oauth_access_tokens").update({ revoked_at: new Date().toISOString() })
+        .eq("user_id", userId).is("revoked_at", null),
+    ]);
+    return json({ ok: true });
   }
 
   // Everything else acts on an existing account. Bearer resolves it; minting

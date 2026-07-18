@@ -93,3 +93,56 @@ describe("password sign-in and change-password shapes", () => {
     expect(response.status).toBe(401);
   });
 });
+
+// Password recovery is two unauthenticated, pre-gate doors: /recover (send the
+// link) and /reset (consume the token_hash). The security-relevant shapes are
+// pinned offline — Supabase is unreachable, so the GoTrue calls fail closed and
+// the rate limiter fails open, exactly as in production degradation.
+describe("password recovery shapes", () => {
+  const FAKE_ENV = { SUPABASE_URL: "http://127.0.0.1:1", SUPABASE_SERVICE_ROLE_KEY: "test" } as unknown as NodeJS.ProcessEnv;
+  const recover = (body: unknown) => handleHostedAccountRequest(new Request("http://local/api/account/recover", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  }), FAKE_ENV);
+  const reset = (body: unknown) => handleHostedAccountRequest(new Request("http://local/api/account/reset", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  }), FAKE_ENV);
+
+  it("recover rejects a malformed email before sending anything", async () => {
+    const response = await recover({ email: "not-an-email" });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error_description: string };
+    expect(body.error_description.toLowerCase()).toContain("valid email");
+  });
+
+  it("recover answers a valid address indistinctly — no account enumeration", async () => {
+    const response = await recover({ email: "reader@example.com" });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { ok: boolean; message: string };
+    expect(body.ok).toBe(true);
+    expect(body.message.toLowerCase()).toContain("on its way");
+  });
+
+  it("reset validates the new password before spending the token", async () => {
+    const response = await reset({ tokenHash: "a".repeat(40), password: "short" });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error_description: string };
+    expect(body.error_description).toContain("8 to 200");
+  });
+
+  it("reset rejects a malformed token as an invalid link", async () => {
+    const response = await reset({ tokenHash: "nope", password: "a-long-enough-password" });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error: string; error_description: string };
+    expect(body.error).toBe("invalid_token");
+    expect(body.error_description.toLowerCase()).toContain("invalid or has expired");
+  });
+
+  it("reset fails closed when the token cannot be verified", async () => {
+    // Well-formed token, valid password — but GoTrue is unreachable, so
+    // verifyRecoveryToken returns null and the door stays shut.
+    const response = await reset({ tokenHash: "a".repeat(40), password: "a-long-enough-password" });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error: string };
+    expect(body.error).toBe("invalid_token");
+  });
+});

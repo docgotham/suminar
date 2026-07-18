@@ -93,6 +93,15 @@ export function hostedRateLimitRules(env: NodeJS.ProcessEnv = process.env) {
       maxHits: envInt(env, "SUMINAR_RATE_SIGNUPS_PER_HOUR", 5),
       windowSeconds: 3600,
     },
+    // Forgot-password sends mail to whatever address is typed, so it must be
+    // as tight as signup — otherwise it is an email-bombing cannon aimed at
+    // someone else's inbox. (GoTrue rate-limits sends too; this is the layer
+    // in front of it.)
+    recoverPerIp: {
+      name: "recover",
+      maxHits: envInt(env, "SUMINAR_RATE_RECOVER_PER_HOUR", 5),
+      windowSeconds: 3600,
+    },
     // Authenticated account-surface operations (tokens, invites, usage).
     accountPerOwner: {
       name: "account",
@@ -110,16 +119,28 @@ export function hostedRateLimitRules(env: NodeJS.ProcessEnv = process.env) {
   } satisfies Record<string, RateLimitRule>;
 }
 
-// First hop of x-forwarded-for is the client on Vercel; requests that carry
-// neither header (local dev, tests) share one bucket rather than skipping.
+// Client identity for per-IP gates, most-trustworthy header first.
+// x-vercel-forwarded-for is set by the platform and cannot be forged by the
+// caller; x-forwarded-for CAN carry a client-supplied leftmost hop, so it is
+// the last resort, not the first — trusting it first let anyone reset the
+// per-IP counter by rotating a fake XFF hop, defeating the anti-email-bomb and
+// credential-stuffing gates (pre-launch review finding). x-real-ip is also
+// platform-set and sits in between. Requests with none of these (local dev,
+// tests) share one bucket rather than skipping the limit.
 export function clientIpFromHeaders(headers: Headers): string {
+  const trusted = headers.get("x-vercel-forwarded-for");
+  if (trusted) {
+    const first = trusted.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  const real = headers.get("x-real-ip")?.trim();
+  if (real) return real;
   const forwarded = headers.get("x-forwarded-for");
   if (forwarded) {
     const first = forwarded.split(",")[0]?.trim();
     if (first) return first;
   }
-  const real = headers.get("x-real-ip")?.trim();
-  return real || "unknown";
+  return "unknown";
 }
 
 interface RateLimitRpcClient {

@@ -43,9 +43,15 @@ describe("hosted rate limiting", () => {
     expect(body.error_description).toContain("Retry in 42 seconds");
   });
 
-  it("keys clients by first forwarded hop, sharing one bucket when headers are absent", () => {
+  it("prefers the platform-set client header over a spoofable x-forwarded-for", () => {
+    // Vercel's header wins even when the caller injects its own leftmost XFF
+    // hop — otherwise the per-IP gate is defeated by rotating a fake hop.
+    expect(clientIpFromHeaders(new Headers({ "x-vercel-forwarded-for": "203.0.113.9", "x-forwarded-for": "1.2.3.4, 203.0.113.9" }))).toBe("203.0.113.9");
+    // x-real-ip (also platform-set) beats x-forwarded-for.
+    expect(clientIpFromHeaders(new Headers({ "x-real-ip": "203.0.113.7", "x-forwarded-for": "1.2.3.4" }))).toBe("203.0.113.7");
+    // Falls back to the first XFF hop only when no trusted header is present.
     expect(clientIpFromHeaders(new Headers({ "x-forwarded-for": "203.0.113.9, 10.0.0.1" }))).toBe("203.0.113.9");
-    expect(clientIpFromHeaders(new Headers({ "x-real-ip": "203.0.113.7" }))).toBe("203.0.113.7");
+    // None of them: one shared bucket rather than skipping the limit.
     expect(clientIpFromHeaders(new Headers())).toBe("unknown");
   });
 

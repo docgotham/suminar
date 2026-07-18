@@ -234,6 +234,14 @@
         <label for="gate-password">Password</label>
         <input id="gate-password" type="password" autocomplete="current-password">
         <div style="margin-top: 1.1rem"><button id="gate-signin">Sign in</button></div>
+        <details class="recover" id="forgot">
+          <summary>Forgot your password?</summary>
+          <p class="status" style="margin:.4rem 0 .2rem">Enter your account email and we'll send a reset link. It works once and expires shortly.</p>
+          <label for="rec-email">Email</label>
+          <input id="rec-email" type="email" autocomplete="email">
+          <div style="margin-top: 1.1rem"><button id="rec-send" class="ghost">Send reset link</button></div>
+          <p class="status" id="rec-status" role="status"></p>
+        </details>
         <details class="recover">
           <summary>Open with a connector token instead</summary>
           <p class="status" style="margin:.4rem 0 .2rem">The same credential your chat uses — handy if you've forgotten the password.</p>
@@ -488,6 +496,27 @@
     }
   });
   $("gate-password").addEventListener("keydown", (event) => { if (event.key === "Enter") $("gate-signin").click(); });
+  // Forgot password: unauthenticated, so plain fetch. The server answers the
+  // same whether or not the email is registered, and so do we — the person is
+  // told a link is on the way without ever confirming the address exists.
+  $("rec-send").addEventListener("click", async () => {
+    const email = $("rec-email").value.trim();
+    if (!email) return setStatus("rec-status", "Enter your account email.", true);
+    setStatus("rec-status", "Sending…");
+    try {
+      const res = await fetch("/api/account/recover", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return setStatus("rec-status", body.error_description || "Could not send a reset link.", true);
+      setStatus("rec-status", body.message || "If that email has a Suminar account, a reset link is on its way.");
+    } catch {
+      setStatus("rec-status", "Could not reach the server.", true);
+    }
+  });
+  $("rec-email").addEventListener("keydown", (event) => { if (event.key === "Enter") $("rec-send").click(); });
   $("gate-open").addEventListener("click", async () => {
     const token = $("gate-token").value.trim();
     if (!token.startsWith("suminar_")) return setStatus("gate-status", "Connector tokens start with suminar_", true);
