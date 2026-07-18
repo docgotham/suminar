@@ -17,6 +17,7 @@
     { "source": "/.well-known/oauth-protected-resource/:path*", "destination": "/api/oauth" },
     { "source": "/.well-known/oauth-authorization-server", "destination": "/api/oauth" },
     { "source": "/.well-known/oauth-authorization-server/:path*", "destination": "/api/oauth" },
+    { "source": "/mcp/.well-known/:path*", "destination": "/api/oauth" },
     { "source": "/oauth/:path*", "destination": "/api/oauth" },
     { "source": "/version", "destination": "/api/version" },
     { "source": "/documents", "destination": "/api/documents" },

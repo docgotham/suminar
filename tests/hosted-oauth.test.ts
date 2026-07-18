@@ -30,6 +30,31 @@ describe("hosted OAuth pure logic", () => {
     expect(body).toMatchObject({ resource: `${ORIGIN}/mcp`, authorization_servers: [ORIGIN] });
   });
 
+  // RFC 9728: a path-component resource's metadata lives at the SUFFIXED
+  // well-known path, and Claude fetches exactly that when an expired access
+  // token forces mid-conversation rediscovery. 404ing it broke token
+  // refresh (live incident 2026-07-18: 401 → 404 → "approval error").
+  it("serves the RFC 9728 path-suffixed protected-resource metadata", async () => {
+    const response = await handleHostedOAuthRequest(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`), {} as NodeJS.ProcessEnv);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ resource: `${ORIGIN}/mcp`, authorization_servers: [ORIGIN] });
+  });
+
+  it("serves the resource-relative well-known variant some clients probe", async () => {
+    const response = await handleHostedOAuthRequest(new Request(`${ORIGIN}/mcp/.well-known/oauth-protected-resource`), {} as NodeJS.ProcessEnv);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ resource: `${ORIGIN}/mcp` });
+  });
+
+  it("serves the suffixed authorization-server metadata variant", async () => {
+    const response = await handleHostedOAuthRequest(new Request(`${ORIGIN}/.well-known/oauth-authorization-server/mcp`), {} as NodeJS.ProcessEnv);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ issuer: ORIGIN, token_endpoint: `${ORIGIN}/oauth/token` });
+  });
+
   it("computes PKCE S256 as base64url sha256 of the verifier", () => {
     const verifier = "a-test-code-verifier-value-1234567890";
     const expected = createHash("sha256").update(verifier, "utf8").digest("base64url");

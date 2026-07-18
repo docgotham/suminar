@@ -105,10 +105,21 @@ export async function resolveBearerOwner(request: Request, env: NodeJS.ProcessEn
 
 export async function handleHostedOAuthRequest(request: Request, env: NodeJS.ProcessEnv = process.env): Promise<Response> {
   const url = new URL(request.url);
-  const pathname = normalizePathname(url.pathname);
+  let pathname = normalizePathname(url.pathname);
+  // Some clients probe the resource-relative well-known form
+  // (/mcp/.well-known/...) alongside RFC 9728's suffixed form; treat both
+  // as the canonical well-known path.
+  if (pathname.startsWith("/mcp/.well-known/")) pathname = pathname.slice("/mcp".length);
   if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
 
-  if (pathname === "/.well-known/oauth-protected-resource" && request.method === "GET") {
+  // RFC 9728 puts a path-component resource's metadata at the SUFFIXED
+  // well-known path (/.well-known/oauth-protected-resource/mcp for resource
+  // /mcp), and that is what Claude's client fetches when an expired access
+  // token forces rediscovery mid-conversation. Serving only the exact base
+  // path 404'd that fetch and broke token refresh (observed live
+  // 2026-07-18: 401 → suffixed-path 404 → client surfaced an approval
+  // error). Serve the base and every suffixed variant identically.
+  if ((pathname === "/.well-known/oauth-protected-resource" || pathname.startsWith("/.well-known/oauth-protected-resource/")) && request.method === "GET") {
     return jsonResponse({
       resource: `${url.origin}/mcp`,
       authorization_servers: [url.origin],
@@ -117,7 +128,7 @@ export async function handleHostedOAuthRequest(request: Request, env: NodeJS.Pro
       resource_name: "Suminar Hosted MCP",
     });
   }
-  if (pathname === "/.well-known/oauth-authorization-server" && request.method === "GET") {
+  if ((pathname === "/.well-known/oauth-authorization-server" || pathname.startsWith("/.well-known/oauth-authorization-server/")) && request.method === "GET") {
     return jsonResponse({
       issuer: url.origin,
       authorization_endpoint: `${url.origin}/oauth/authorize`,
