@@ -145,6 +145,12 @@
   .sem .title { font-size: .875rem; font-weight: 600; flex: 1 1 auto; min-width: 0; }
   .sem .title.derived { font-weight: 400; font-style: italic; }
   .sem .meta { font-size: .75rem; color: var(--mut); margin-top: .15rem; }
+  /* Always-visible open affordance — hover and cursor cues are invisible on
+     touch, so a chevron is the only signal a phone user gets that the row
+     opens a record. */
+  .sem .semchev { flex: 0 0 auto; color: var(--mut); font-size: 1.15rem; line-height: 1; align-self: center; }
+  .sem:hover .semchev { color: var(--accent); }
+  .semhint { font-size: .75rem; color: var(--mut); margin: .1rem 0 .65rem; }
   .live {
     display: inline-block; font-size: .65625rem; font-weight: 700; letter-spacing: .06em;
     color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 .45rem;
@@ -200,6 +206,7 @@
   </section>
 
   <section id="pane-seminars" hidden>
+    <p class="semhint" id="sem-hint" hidden>Tap a seminar to open its full record — every message, citation, and source turn.</p>
     <div id="seminars"></div>
     <div class="toggleline"><button class="ghost" id="show-all" hidden>Show conversations without agent turns</button></div>
   </section>
@@ -376,6 +383,9 @@
       const title = el("span", { class: "title" + (named ? "" : " derived") }, seminar.title || derivedTitle(seminar));
       titleline.append(title);
       if (now - Date.parse(seminar.lastEventAt || seminar.updatedAt) < 180000) { titleline.append(el("span", { class: "live" }, "live")); anyLive = true; }
+      const chev = el("span", { class: "semchev", title: "Open the full record" }, "›");
+      chev.setAttribute("aria-hidden", "true");
+      titleline.append(chev);
       box.append(titleline);
       // The home list is pure navigation; the seminar page is where a
       // seminar is managed (renamed, read, exported).
@@ -388,6 +398,7 @@
     $("show-all").hidden = SHOW_ALL || hidden === 0;
     if (!SHOW_ALL && hidden > 0) $("show-all").textContent = "Show " + hidden + " conversation" + (hidden === 1 ? "" : "s") + " without agent turns";
     $("tab-live-dot").hidden = !anyLive;
+    $("sem-hint").hidden = wrap.childElementCount === 0;
   }
   $("show-all").addEventListener("click", () => { SHOW_ALL = true; loadAll(); });
 

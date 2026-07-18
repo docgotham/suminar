@@ -269,7 +269,7 @@
           <thead><tr><th style="width:1.2rem"></th><th>Source</th><th>Agent</th><th>Status</th></tr></thead>
           <tbody></tbody>
         </table></div>
-        <p class="empty" id="docs-empty" hidden>No sources yet — upload the first below.</p>
+        <p class="empty" id="docs-empty" hidden>No sources yet. Upload one below to build your first agent — or, if a colleague sent you a syndication code, redeem it below to add their source to your shelf.</p>
         <details class="uploader">
         <summary>Upload a source (PDF or .docx)</summary>
         <form id="upload" style="margin-top: .75rem">
@@ -294,7 +294,7 @@
           </details>
         </form>
         </details>
-        <details class="uploader">
+        <details class="uploader" id="redeem">
         <summary>Redeem a syndication code</summary>
         <div class="row" style="margin-top:.75rem">
           <div><label for="syn-code">Code from a colleague</label><input id="syn-code" autocomplete="off" placeholder="smn_syn_…"></div>
@@ -413,7 +413,20 @@
     gate.hidden = true; dash.hidden = false; signout.hidden = false;
     $("companion-controls").hidden = false;
     await Promise.all([loadDocs(), loadTokens(), loadInvites(), loadUsage()]).catch(() => {});
+    focusRedeemIfRequested();
   }
+
+  // Deep link: suminar.ai/account#redeem opens and focuses the redeem box, so
+  // the person who sends a code can send a link that lands the recipient
+  // exactly where they need to paste it.
+  function focusRedeemIfRequested() {
+    if (location.hash.toLowerCase() !== "#redeem" || !TOKEN) return;
+    const box = $("redeem");
+    box.open = true;
+    box.scrollIntoView({ behavior: "smooth", block: "center" });
+    $("syn-code").focus({ preventScroll: true });
+  }
+  window.addEventListener("hashchange", focusRedeemIfRequested);
 
   // ---- gate ----
   $("gate-open").addEventListener("click", async () => {
@@ -627,6 +640,11 @@
     $("docs-empty").hidden = total > 0;
     table.hidden = total === 0;
     $("docs-controls").hidden = total === 0;
+    // A cold-start shelf is often a syndication recipient (Jake with a code
+    // and nothing else). Surface the non-obvious action — the uploader is
+    // self-evident, the redeem box was folded shut and missed. Only auto-open
+    // on an empty shelf; never fight a user who has closed it.
+    if (total === 0) $("redeem").open = true;
     for (const doc of rows) {
       // Compact row: chevron, the MLA citation, handle, status. Everything
       // else lives in the disclosure row below (the Voices adaptation).
