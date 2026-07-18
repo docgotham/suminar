@@ -410,12 +410,19 @@ export class ConversationService {
     const acceptedHostMessages = appended.filter((event) => event.speakerType === "host").map((event) => event.authoredMessage);
     const conductNotices = hostConductNotices(acceptedHostMessages);
     const preAppend = stored.at(-1);
-    const consecutiveUserEvents = appended.some((event, index) => {
+    // Name the exact gap: a generic "sync your reply too" nudge was watched
+    // being read and ignored live (2026-07-18 — a host synced pleasantries
+    // and skipped its own synthesis). Specific sequences remove discretion.
+    const consecutiveUserGaps: Array<[number, number]> = [];
+    appended.forEach((event, index) => {
       const previous = index === 0 ? preAppend : appended[index - 1];
-      return event.speakerType === "user" && previous?.speakerType === "user";
+      if (event.speakerType === "user" && previous?.speakerType === "user") {
+        consecutiveUserGaps.push([previous.sequence, event.sequence]);
+      }
     });
-    if (consecutiveUserEvents) {
-      conductNotices.push("Two consecutive user turns were synchronized with no host contribution between them. If you spoke between them, synchronize that visible host message too—but never canonical source-agent blocks or tool-recorded host addresses.");
+    if (consecutiveUserGaps.length) {
+      const spans = consecutiveUserGaps.map(([before, after]) => `${before} and ${after}`).join("; ");
+      conductNotices.push(`The record now shows consecutive user turns with no host speech between them (sequences ${spans}). If you replied between those user messages in this thread, synchronize that reply verbatim in your next call, before anything else — a host's own substantive answer (an analysis, a synthesis, a clarification) is seminar speech and belongs in the record exactly like a user turn. Never backfill canonical source-agent blocks or tool-recorded host addresses; if the adjacent turns came from the seminar's other connected chats, no action is needed.`);
     }
     // Catch-up delivery: region turns that were not this host's own replays
     // are speech it has never seen — recorded by the seminar's other
