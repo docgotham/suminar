@@ -377,6 +377,20 @@
   let TOKEN = null;
   try { TOKEN = sessionStorage.getItem("suminar_token"); } catch {}
 
+  // Device bootstrap: the companion persists a durable connector token in
+  // same-origin localStorage (that's its installed-app sign-in). The installed
+  // app's "account ↗" always lands in a FRESH context — empty sessionStorage,
+  // gate every time — so when this page opens with no tab session, sign in
+  // with the device's own companion credential instead of gating. Read-only
+  // reuse of a token the user already chose to keep on this device; this page
+  // still never WRITES durable bearers itself (the 1.0.53 rule stands).
+  if (!TOKEN) {
+    try {
+      const seed = localStorage.getItem("suminar_token");
+      if (seed && seed.startsWith("suminar_")) TOKEN = seed;
+    } catch {}
+  }
+
   const $ = (id) => document.getElementById(id);
   const gate = $("gate"), dash = $("dash"), signout = $("signout");
 
@@ -414,8 +428,21 @@
   }
 
   function showGate(message) {
+    const departing = TOKEN;
     TOKEN = null;
     try { sessionStorage.removeItem("suminar_token"); } catch {}
+    // If the departing bearer IS the device seed (the companion's persisted
+    // copy of the same credential), it must not resurrect the session on the
+    // next load — a sign-out that silently signs back in is no sign-out, and
+    // a 401 here means the token is dead anyway. Identity check, not a flag:
+    // flags don't survive the reload that copies the seed into sessionStorage.
+    // Web sessions (smn_web_) never match, so password visits leave the
+    // companion's device sign-in untouched.
+    try {
+      if (departing && localStorage.getItem("suminar_token") === departing) {
+        localStorage.removeItem("suminar_token");
+      }
+    } catch {}
     dash.hidden = true; gate.hidden = false; signout.hidden = true;
     $("companion-controls").hidden = true;
     if (message) setStatus("gate-status", message, true);
