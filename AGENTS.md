@@ -6,11 +6,12 @@
 2. Read this file completely.
 3. Read `README.md` completely before changing architecture, prompts, MCP tools, ingestion, quotation behavior, conversation synchronization, or federation.
 4. Read `docs/design-notes.md` before touching host-conduct kernel text or the address/proposal state machine — it records Dave-approved design directions (with rationale) that are agreed but not yet implemented.
-5. Preserve private-source isolation and canonical authorship ahead of convenience.
-6. Keep changes inside this repository unless the user explicitly names another project. FlightBot, Zulip, Omni-American Commons, dm_sum/Mem·Sum, and earlier Agent·Sum repositories are references, not mutation targets.
-7. Never expose, commit, copy into tests, or print private source artifacts, runtime data, or secrets.
-8. Use `apply_patch` for hand edits and preserve unrelated user changes.
-9. Run the verification sequence at the end of this file.
+5. Family law lives outside this repo: the family-level ontology, grammar (@/#/[[...]]), identity model, and Companion conventions are at `C:\Users\Dave\Katamari\wiki\topics\Sum Family Ontology and Conventions.md`. Read it before family-level design work, and update it (and its `updated:` date) in any session that changes a family convention. Product law stays here.
+6. Preserve private-source isolation and canonical authorship ahead of convenience.
+7. Keep changes inside this repository unless the user explicitly names another project. FlightBot, Zulip, Omni-American Commons, dm_sum/Mem·Sum, and earlier Agent·Sum repositories are references, not mutation targets.
+8. Never expose, commit, copy into tests, or print private source artifacts, runtime data, or secrets.
+9. Use `apply_patch` for hand edits and preserve unrelated user changes.
+10. Run the verification sequence at the end of this file.
 
 This is a TypeScript ESM project requiring Node.js 24 or later. Python supports PDF extraction and optional OCR. The package and MCP server version is `1.0.0` (the hosted launch); the public federation envelope remains `agent-sum/0.1`.
 
