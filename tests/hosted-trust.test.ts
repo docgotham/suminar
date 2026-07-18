@@ -27,7 +27,7 @@ describe("public claims stay pinned to code", () => {
     const readme = await read("README.md");
     const mcp = await read("src", "suminar", "mcp.ts");
     const registered = [...mcp.matchAll(/registerTool\(\s*"(suminar_[a-z_]+)"/g)].map((m) => m[1]).sort();
-    expect(registered.length).toBe(7);
+    expect(registered.length).toBe(8);
     const documented = [...new Set([...readme.matchAll(/suminar_[a-z_]+/g)].map((m) => m[0]))].sort();
     expect(documented).toEqual(registered);
   });

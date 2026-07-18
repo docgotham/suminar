@@ -149,6 +149,7 @@ The optional local dashboard at `http://127.0.0.1:4317` manages ingestion, repre
 - `suminar_sync_conversation`
 - `suminar_address_source_agents`
 - `suminar_resume_seminar` (hosted deployments only: redeems a user-presented resume code to continue an existing seminar in a new host thread — seminars belong to the account, not to any chat platform)
+- `suminar_read_record` (page through a seminar's canonical record verbatim — how a resuming host catches up on history beyond the recap)
 - `suminar_read_message`
 - `suminar_preview_remote_origin`
 

@@ -219,11 +219,14 @@ export class SupabaseStore implements ConversationStore {
 
   async saveConversation(conversation: ConversationSession): Promise<void> {
     await this.assertOwnedConversation(conversation.conversationToken);
+    // last_sequence is deliberately NOT written here: the append RPC is its
+    // sole writer. A session object is a snapshot, and writing its cursor
+    // back would regress the head whenever another host thread appended
+    // between this caller's read and this save.
     unwrap(await this.client
       .from("conversations")
       .update({
         input_fidelity_policy: conversation.inputFidelityPolicy,
-        last_sequence: conversation.lastSequence,
       })
       .eq("owner", this.owner)
       .eq("token", conversation.conversationToken)
@@ -243,25 +246,47 @@ export class SupabaseStore implements ConversationStore {
     }
   }
 
+  // Positional appends are retired hosted-side: a caller-chosen sequence
+  // inserted without the head lock would collide with the RPC's assignments
+  // and poison every subsequent append on the (token, sequence) PK. The
+  // single-event signature survives by delegating to the head-assigning
+  // path; the caller's sequence is ignored.
   async appendConversationEvent(
     conversationToken: string,
     input: Omit<ConversationEvent, "schemaVersion" | "eventId" | "createdAt" | "contentHash" | "conversationToken">,
   ): Promise<ConversationEvent> {
-    await this.assertOwnedConversation(conversationToken);
-    const event: ConversationEvent = {
+    const { sequence: _ignored, ...rest } = input;
+    const [event] = await this.appendConversationEventsAtHead(conversationToken, [rest]);
+    return event!;
+  }
+
+  // B2-solo: the RPC locks the conversation row, assigns sequences at the
+  // true head, inserts the batch, and bumps last_sequence in one
+  // transaction — concurrent host threads cannot collide on a position.
+  async appendConversationEventsAtHead(
+    conversationToken: string,
+    inputs: Array<Omit<ConversationEvent, "schemaVersion" | "eventId" | "createdAt" | "contentHash" | "conversationToken" | "sequence">>,
+  ): Promise<ConversationEvent[]> {
+    if (!inputs.length) return [];
+    const events: ConversationEvent[] = inputs.map((input) => ({
       schemaVersion: 1,
       conversationToken,
+      // sequence is assigned inside the RPC; 0 is a placeholder it rewrites.
+      sequence: 0,
       eventId: randomUUID(),
       createdAt: new Date().toISOString(),
       contentHash: sha256(input.authoredMessage),
       ...input,
-    };
-    unwrap(await this.client.from("conversation_events").insert({
-      conversation_token: conversationToken,
-      sequence: event.sequence,
-      event,
-    }).select("sequence").single(), "Append conversation event");
-    return event;
+    }));
+    const result = await this.client.rpc("append_conversation_events", {
+      p_token: conversationToken,
+      p_owner: this.owner,
+      p_events: events,
+    });
+    if (result.error) throw new Error(`Append conversation events: ${result.error.message}`);
+    const assigned = result.data as { start: number; end: number; last_sequence: number };
+    this.ownedTokens.add(conversationToken);
+    return events.map((event, index) => ({ ...event, sequence: assigned.start + index }));
   }
 
   async readConversationEvents(conversationToken: string): Promise<ConversationEvent[]> {

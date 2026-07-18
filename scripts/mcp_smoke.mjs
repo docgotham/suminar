@@ -29,6 +29,7 @@ try {
     "suminar_inspect_agent",
     "suminar_sync_conversation",
     "suminar_address_source_agents",
+    "suminar_read_record",
     "suminar_read_message",
     "suminar_preview_remote_origin",
   ];

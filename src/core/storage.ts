@@ -24,6 +24,14 @@ export interface ConversationStore {
     conversationToken: string,
     input: Omit<ConversationEvent, "schemaVersion" | "eventId" | "createdAt" | "contentHash" | "conversationToken">,
   ): MaybePromise<ConversationEvent>;
+  // B2-solo: the server assigns positions. The store appends the batch at the
+  // current head — atomically with respect to every other appender — and
+  // returns the events with their assigned sequences. Callers never compute
+  // sequence numbers; the store is the single writer of the head.
+  appendConversationEventsAtHead(
+    conversationToken: string,
+    inputs: Array<Omit<ConversationEvent, "schemaVersion" | "eventId" | "createdAt" | "contentHash" | "conversationToken" | "sequence">>,
+  ): MaybePromise<ConversationEvent[]>;
   readConversationEvents(conversationToken: string): MaybePromise<ConversationEvent[]>;
   readAgentMessage(messageId: string): MaybePromise<StoredCanonicalMessage | undefined>;
 }
@@ -154,7 +162,19 @@ export class LocalStore implements ConversationStore {
 
   saveConversation(conversation: ConversationSession): void {
     conversationSessionSchema.parse(conversation);
-    this.writeJsonAtomic(path.join(this.conversationsDir, `${conversation.conversationToken}.json`), conversation);
+    const file = path.join(this.conversationsDir, `${conversation.conversationToken}.json`);
+    // The head is monotonic: a session object is a snapshot, and appends may
+    // have advanced the stored head since it was read (the MCP SDK serves
+    // requests concurrently even in one process). Writing a stale cursor
+    // back would make the next append reuse sequences — the same regression
+    // the hosted store prevents by never writing last_sequence here.
+    if (fs.existsSync(file)) {
+      const current = conversationSessionSchema.parse(this.readJson<unknown>(file)) as ConversationSession;
+      if (current.lastSequence > conversation.lastSequence) {
+        conversation = { ...conversation, lastSequence: current.lastSequence };
+      }
+    }
+    this.writeJsonAtomic(file, conversation);
   }
 
   appendConversationEvent(
@@ -172,6 +192,23 @@ export class LocalStore implements ConversationStore {
     };
     fs.appendFileSync(path.join(this.conversationEventsDir, `${conversationToken}.jsonl`), `${JSON.stringify(event)}\n`, "utf8");
     return event;
+  }
+
+  // Single-process, so "atomic" is simply sequential: read the head, assign,
+  // append, bump. The conversation file's lastSequence is updated here so the
+  // store — not the caller — owns the head, matching the hosted RPC.
+  appendConversationEventsAtHead(
+    conversationToken: string,
+    inputs: Array<Omit<ConversationEvent, "schemaVersion" | "eventId" | "createdAt" | "contentHash" | "conversationToken" | "sequence">>,
+  ): ConversationEvent[] {
+    if (!inputs.length) return [];
+    const conversation = this.getConversation(conversationToken);
+    let head = conversation.lastSequence;
+    const appended = inputs.map((input) => this.appendConversationEvent(conversationToken, { ...input, sequence: ++head }));
+    conversation.lastSequence = head;
+    conversation.updatedAt = new Date().toISOString();
+    this.saveConversation(conversation);
+    return appended;
   }
 
   readConversationEvents(conversationToken: string): ConversationEvent[] {

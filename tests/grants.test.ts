@@ -67,6 +67,19 @@ class FakeInnerStore implements ConversationStore {
     return event;
   }
 
+  appendConversationEventsAtHead(
+    conversationToken: string,
+    inputs: Array<Omit<ConversationEvent, "schemaVersion" | "eventId" | "createdAt" | "contentHash" | "conversationToken" | "sequence">>,
+  ): ConversationEvent[] {
+    const session = this.conversations.get(conversationToken);
+    if (!session) throw new Error("Unknown or expired Suminar conversation token");
+    let head = session.lastSequence;
+    const appended = inputs.map((input) => this.appendConversationEvent(conversationToken, { ...input, sequence: ++head }));
+    session.lastSequence = head;
+    this.conversations.set(conversationToken, session);
+    return appended;
+  }
+
   readConversationEvents(conversationToken: string): ConversationEvent[] {
     return (this.events.get(conversationToken) ?? []).map((event) => ({ ...event }));
   }
@@ -179,8 +192,17 @@ describe("GrantResolvingStore", () => {
     expect(inner.appendedTokens).toEqual([raw.conversationToken]);
     expect(inner.appendedViaGrant).toEqual(["g1"]);
 
+    // The head-assigning batch path carries the same echo and provenance.
+    const batch = await store.appendConversationEventsAtHead(GRANT_TOKEN, [{
+      speakerType: "host", speakerDisplayName: "Host",
+      authoredMessage: "batched", fidelity: "model_copied_unverified",
+    }]);
+    expect(batch[0]!.conversationToken).toBe(GRANT_TOKEN);
+    expect(inner.appendedTokens.at(-1)).toBe(raw.conversationToken);
+    expect(inner.appendedViaGrant.at(-1)).toBe("g1");
+
     const events = await store.readConversationEvents(GRANT_TOKEN);
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(2);
     expect(events[0]!.conversationToken).toBe(GRANT_TOKEN);
   });
 

@@ -166,11 +166,89 @@ custody is user discipline, not server enforcement, until B), and an old
 host's window simply won't show turns made elsewhere — the record is the
 complete view (constraint above). Redemptions are one-use and logged.
 
+## B2-solo — multi-HOST protocol (SHIPPED 1.0.49, 2026-07-18)
+
+Live two-host use (one human bouncing a seminar between ChatGPT and Claude)
+hit every failure mode the multi-writer design predicted: a parked host tab
+returning at a stale cursor dead-ended on "previously synchronized visible
+speech cannot be rewritten" (no recovery path), and a resuming host saw 8 of
+42 turns and never the user's pasted draft. The lesson: **the multi-writer
+problem was never about the second human — two humans concurrently and one
+human on two hosts are the identical protocol shape.** So B2's protocol core
+shipped solo, leaving the Jake-facing surfaces (seats, invites, @human,
+convener) in deferred Increment B.
+
+What it is:
+1. **Server-assigned sequences.** Hosts submit speech, never positions;
+   `afterCursor` now means "the highest sequence this thread has seen." The
+   append path is one Postgres function (FOR UPDATE on the conversation row
+   — lock before check, the Mem·Sum lesson) that assigns at the true head.
+   The gap error and the rewrite-conflict error cease to exist as classes.
+   All four append sites (sync, proposal, visible_host, agent answer) go
+   through it; `saveConversation` no longer writes last_sequence (a session
+   snapshot must not regress the head under concurrency).
+2. **Replay dedup by content, not position.** A batch prefix matching a
+   contiguous run in the unacknowledged region (anchored last, accepted only
+   if the run reaches the region end or consumes the batch) is a retry;
+   hostMessageId on both sides must agree, defeating coincidence. Honest
+   edge: an identical un-acknowledged message from another thread can be
+   absorbed as a replay — rare, benign (solo: both threads are the same
+   user), and defeated whenever hosts supply hostMessageId.
+3. **Missed-turn delivery.** Sync results (and the address call's embedded
+   sync) deliver the region turns that weren't the caller's own replays —
+   verbatim, attributed, under the conditional display contract — capped at
+   20 turns / ~16k chars keeping the most recent; a turn over 2,500 chars
+   arrives as a bracketed mechanical placeholder (never truncated speech);
+   older overflow collapses into one mechanical line. Both point at:
+4. **`suminar_read_record`** — paginated verbatim record reads (the cure for
+   resume blindness; the resume ack nudges it when the recap covers less
+   than the record). Reading never substitutes for syncing and read turns
+   are never re-synchronized.
+5. **throughCursor is advisory** on the address tool: behind-the-head is
+   normal (another chat advanced the seminar); ahead-of-record still fails
+   fast. Agents were never affected — they read the whole room server-side.
+
+An adversarial review (five confirmed findings, all fixed pre-ship) forced
+the replay rule to **tail-only** matching: a batch prefix is a replay only
+when it is exactly the latest recorded speech. The anywhere-in-region rule
+it replaced could silently swallow a genuinely NEW turn repeating earlier
+wording — the lost-ratification case ("yes" … proposal … new "yes"), the
+one failure a scholarly record cannot have. speakerDisplayName joined the
+match key (a ChatGPT-authored turn never absorbs a Claude-authored one),
+hostMessageId became a real wire field on the sync schema (exact dedup when
+platforms supply ids), a host's own just-submitted wording is excluded from
+missed-turn delivery (no self-echo), a block never rides both the
+missed-turn delivery and the display check (one block, one directive),
+delivery errors (direct_address_required) carry the embedded sync's
+deliveries rather than dropping them, the agent delivery cursor no longer
+vaults over foreign turns landed mid-generation, LocalStore's head became
+monotonic under concurrent saves, and hosted positional appends were
+disarmed (they delegate to the head-assigning RPC).
+
+Accepted trade-offs, recorded deliberately: a razor race between the dedup
+read and the append, and the lost-ack-retry-races-foreign-append case —
+worst case in both is one rare VISIBLE duplicate turn, never silent loss,
+never corruption (duplication is the chosen failure mode; loss is the
+forbidden one); an identical-content user turn at the exact region tail
+from another thread can still be absorbed (solo-benign — both threads are
+the same human; defeated wherever hostMessageId is supplied);
+arrival-order interleaving without reply-to links (full B adds causality
+links when a second human makes them necessary); ratified_host_address
+still requires the proposal to be the immediately preceding event, so a
+foreign append between proposal and "yes" correctly expires it — now
+triggerable invisibly from another chat; the record stays append-only and
+immutable throughout — what changed is that a colliding write is a new
+utterance, not a rewrite attempt.
+
 ## Multi-human seminars — Increment B (designed in depth 2026-07-17; DEFERRED — Dave decided not to build)
 
 The direction stays ratified; the build is deliberately deferred. Everything
 below is the resumable state of the design, settled in the 2026-07-17
-discussion (grounded in a kernel read + a dm_sum recon).
+discussion (grounded in a kernel read + a dm_sum recon). **2026-07-18
+update: B2's protocol core shipped solo (see B2-solo above); what remains of
+B is identity and conduct — seats/invites, server-stamped attribution
+display, @human correspondence, convener semantics, reply-to links,
+seat-not-mirror delivery scoping.**
 
 The shape: the same capability-code primitive with a different redeemer —
 the convener mints an **invite** and another account joins the seminar as a

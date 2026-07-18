@@ -232,6 +232,19 @@ export interface RecoveredCanonicalTurn {
   displayText: string;
 }
 
+// A turn delivered to a host thread that has not seen it: recorded by the
+// same seminar's other connected chats, or completed after this thread's
+// last synchronization. Delivered verbatim under the conditional display
+// contract; a turn too large for delivery arrives as a mechanical
+// placeholder pointing at the record-read tool instead of mangled verbatim.
+export interface DeliveredMissedTurn {
+  sequence: number;
+  speakerType: ConversationSpeakerType;
+  speakerDisplayName: string;
+  displayText: string;
+  omittedForLength?: boolean;
+}
+
 export interface ConversationSyncResult {
   conversationToken: string;
   previousCursor: number;
@@ -240,6 +253,24 @@ export interface ConversationSyncResult {
   replayedEvents: number;
   hostConductNotices?: string[];
   recentCanonicalTurns?: RecoveredCanonicalTurn[];
+  missedTurns?: DeliveredMissedTurn[];
+}
+
+// One page of the canonical record, host-readable: the cure for a resuming
+// or returning host's blindness. Text is verbatim and never truncated —
+// pagination bounds volume, not fidelity.
+export interface ReadRecordResult {
+  conversationToken: string;
+  afterCursor: number;
+  totalEvents: number;
+  turns: Array<{
+    sequence: number;
+    speakerType: ConversationSpeakerType;
+    speakerDisplayName: string;
+    text: string;
+  }>;
+  nextCursor: number;
+  done: boolean;
 }
 
 export interface ConversationInvocationResult {

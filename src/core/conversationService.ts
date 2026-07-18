@@ -19,6 +19,8 @@ import type {
   ConversationSession,
   ConversationSyncResult,
   ConversationTranscriptMessage,
+  DeliveredMissedTurn,
+  ReadRecordResult,
   RecoveredCanonicalTurn,
   CopiedVisibleConversationEvent,
   DisplayedAgentMessage,
@@ -241,12 +243,6 @@ function transcriptEvent(event: ConversationEvent): ConversationTranscriptMessag
   };
 }
 
-function sameCopiedEvent(stored: ConversationEvent, input: SyncableConversationEvent): boolean {
-  return stored.speakerType === input.speakerType
-    && stored.authoredMessage === input.authoredMessage
-    && stored.speakerDisplayName === (input.speakerDisplayName?.trim() || (input.speakerType === "user" ? "User" : "Host"));
-}
-
 export class ConversationService {
   private readonly federation: FederationClient;
   private readonly localInvoker: LocalAgentInvoker;
@@ -336,6 +332,7 @@ export class ConversationService {
 
   async syncConversation(input: SyncConversationInput): Promise<ConversationSyncResult> {
     if (!Number.isInteger(input.afterCursor) || input.afterCursor < 0) throw new Error("Conversation cursor must be a non-negative integer");
+    if (!input.events.length) throw new Error("A synchronization must contain at least one visible event");
     if (input.events.length > 500) throw new Error("A single synchronization may contain at most 500 visible events");
     const conversation = input.conversationToken
       ? await this.store.getConversation(input.conversationToken)
@@ -347,70 +344,202 @@ export class ConversationService {
       throw new Error("A new Suminar conversation must begin at cursor 0");
     }
     if (input.afterCursor > conversation.lastSequence) {
-      throw new Error(`Conversation synchronization has a gap: server cursor is ${conversation.lastSequence}, host supplied ${input.afterCursor}`);
+      throw new Error(`Conversation cursor runs ahead of the record: server cursor is ${conversation.lastSequence}, host supplied ${input.afterCursor}`);
     }
     if (conversation.inputFidelityPolicy === "strict"
         && input.events.some((event) => event.speakerType === "user" && event.fidelity !== "host_attested_exact")) {
       throw new Error("This conversation requires host-attested exact user messages");
     }
-    const stored = await this.store.readConversationEvents(conversation.conversationToken);
-    let acceptedEvents = 0;
-    let replayedEvents = 0;
-    const acceptedHostMessages: string[] = [];
-    let consecutiveUserEvents = false;
-    for (let index = 0; index < input.events.length; index += 1) {
-      const eventInput = input.events[index]!;
+    for (const eventInput of input.events) {
       if (!eventInput.authoredMessage.trim()) throw new Error("Visible conversation events must not be empty");
-      const sequence = input.afterCursor + index + 1;
-      const existing = stored[sequence - 1];
-      if (existing) {
-        if (!sameCopiedEvent(existing, eventInput)) {
-          throw new Error(`Conversation history conflict at sequence ${sequence}; previously synchronized visible speech cannot be rewritten`);
-        }
-        replayedEvents += 1;
-        continue;
+    }
+    const stored = await this.store.readConversationEvents(conversation.conversationToken);
+    // B2-solo: the server assigns positions, so afterCursor means "the
+    // highest sequence this host thread has seen," never "where my events
+    // go." Everything recorded past it is the unacknowledged region: this
+    // host's own unconfirmed submissions (replays to absorb) and other
+    // connected threads' turns (missed turns to deliver).
+    const region = stored.filter((event) => event.sequence > input.afterCursor);
+    // Replay detection is content-based now that positions are assigned:
+    // a batch prefix already present as a contiguous run at the REGION TAIL
+    // is a retry of speech this host submitted but never saw acknowledged.
+    // Tail-only is deliberate: a mid-region match is another turn that
+    // happens to share wording (a repeated "yes" with a proposal after it),
+    // and absorbing it would silently lose new speech — the one failure a
+    // scholarly record cannot have. The residual cost is rare, visible
+    // duplication when a lost-ack retry races another thread's append.
+    // speakerDisplayName participates in the key (a ChatGPT-authored turn
+    // never absorbs a Claude-authored one), and when both sides carry
+    // hostMessageId they must agree, defeating coincidence outright.
+    const normalizedDisplayName = (candidate: SyncableConversationEvent): string =>
+      candidate.speakerDisplayName?.trim() || (candidate.speakerType === "user" ? "User" : "Host");
+    const matchesStored = (candidate: SyncableConversationEvent, event: ConversationEvent): boolean =>
+      event.speakerType === candidate.speakerType
+      && event.authoredMessage === candidate.authoredMessage
+      && event.speakerDisplayName === normalizedDisplayName(candidate)
+      && (!candidate.hostMessageId || !event.hostMessageId || candidate.hostMessageId === event.hostMessageId);
+    let replayStart = -1;
+    let replayedEvents = 0;
+    for (let start = region.length - 1; start >= 0; start -= 1) {
+      if (!matchesStored(input.events[0]!, region[start]!)) continue;
+      let count = 0;
+      while (count < input.events.length && start + count < region.length && matchesStored(input.events[count]!, region[start + count]!)) count += 1;
+      // The run must reach the region's end — the batch prefix is exactly
+      // the latest recorded speech. Anything else is coincidence.
+      if (start + count === region.length) {
+        replayStart = start;
+        replayedEvents = count;
+        break;
       }
-      if (sequence !== conversation.lastSequence + 1) {
-        throw new Error(`Conversation synchronization has an unresolved gap before sequence ${sequence}`);
-      }
-      const appended = await this.store.appendConversationEvent(conversation.conversationToken, {
-        sequence,
+    }
+    const remainder = input.events.slice(replayedEvents);
+    let appended: ConversationEvent[] = [];
+    if (remainder.length) {
+      appended = await this.store.appendConversationEventsAtHead(conversation.conversationToken, remainder.map((eventInput) => ({
         speakerType: eventInput.speakerType,
         speakerDisplayName: eventInput.speakerDisplayName?.trim() || (eventInput.speakerType === "user" ? "User" : "Host"),
         authoredMessage: eventInput.authoredMessage,
         fidelity: eventInput.fidelity,
         captureMethod: eventInput.captureMethod,
         ...(eventInput.hostMessageId ? { hostMessageId: eventInput.hostMessageId } : {}),
-      });
-      if (appended.speakerType === "user" && stored.at(-1)?.speakerType === "user") consecutiveUserEvents = true;
-      stored.push(appended);
-      conversation.lastSequence = sequence;
-      acceptedEvents += 1;
-      if (appended.speakerType === "host") acceptedHostMessages.push(appended.authoredMessage);
+      })));
+      conversation.lastSequence = appended.at(-1)!.sequence;
     }
     conversation.updatedAt = new Date().toISOString();
     await this.store.saveConversation(conversation);
+    const acceptedHostMessages = appended.filter((event) => event.speakerType === "host").map((event) => event.authoredMessage);
     const conductNotices = hostConductNotices(acceptedHostMessages);
+    const preAppend = stored.at(-1);
+    const consecutiveUserEvents = appended.some((event, index) => {
+      const previous = index === 0 ? preAppend : appended[index - 1];
+      return event.speakerType === "user" && previous?.speakerType === "user";
+    });
     if (consecutiveUserEvents) {
       conductNotices.push("Two consecutive user turns were synchronized with no host contribution between them. If you spoke between them, synchronize that visible host message too—but never canonical source-agent blocks or tool-recorded host addresses.");
     }
+    // Catch-up delivery: region turns that were not this host's own replays
+    // are speech it has never seen — recorded by the seminar's other
+    // connected chats, or completed after its last synchronization. Deliver
+    // them verbatim under the conditional display contract, most recent
+    // first when the budget forces a cut, with oversized turns arriving as
+    // mechanical placeholders (a mangled verbatim is worse than a pointer).
+    // Turns identical to the batch this host just submitted are excluded:
+    // the host self-evidently knows its own words, and echoing them back
+    // after an unclaimed retry would re-display its own speech.
+    const missedSource = region.filter((event, index) => {
+      const insideReplayRun = replayStart >= 0 && index >= replayStart && index < replayStart + replayedEvents;
+      if (insideReplayRun) return false;
+      return !input.events.some((candidate) => matchesStored(candidate, event));
+    });
+    const missedTurns = this.deliverableMissedTurns(conversation, missedSource);
+    const missedSequences = new Set(missedTurns.map((turn) => turn.sequence));
+    const fullLog = [...stored, ...appended];
     // Resupply the most recent canonical turns for the host's display check.
     // The server cannot know whether a prior response reached the host (a
     // client can time out after the answer was composed and stored), so the
     // host — the only party that can see the visible conversation — decides:
-    // skip blocks already shown, display any that are missing.
-    const recentCanonicalTurns = stored
+    // skip blocks already shown, display any that are missing. Blocks that
+    // already ride in this result's missed-turn delivery are excluded here:
+    // one block, one directive.
+    const recentCanonicalTurns = fullLog
       .filter((event) => event.fidelity === "canonical_source_agent" || event.fidelity === "canonical_host_address")
+      .filter((event) => !missedSequences.has(event.sequence))
       .slice(-3)
       .map((event) => this.recoveredCanonicalTurn(conversation, event));
     return {
       conversationToken: conversation.conversationToken,
       previousCursor: input.afterCursor,
       cursor: conversation.lastSequence,
-      acceptedEvents,
+      acceptedEvents: appended.length,
       replayedEvents,
       ...(conductNotices.length ? { hostConductNotices: conductNotices } : {}),
       ...(recentCanonicalTurns.length ? { recentCanonicalTurns } : {}),
+      ...(missedTurns.length ? { missedTurns } : {}),
+    };
+  }
+
+  // Bounded verbatim delivery: up to 20 turns and ~16k characters, keeping
+  // the most recent. Older overflow collapses into one mechanical line, and
+  // any single turn too large to deliver verbatim becomes a placeholder —
+  // both point at the record-read tool rather than truncating speech.
+  private deliverableMissedTurns(conversation: ConversationSession, events: ConversationEvent[]): DeliveredMissedTurn[] {
+    if (!events.length) return [];
+    const MAX_TURNS = 20;
+    const MAX_TOTAL_CHARS = 16_000;
+    const MAX_TURN_CHARS = 2_500;
+    const recent = events.slice(-MAX_TURNS);
+    const omittedBefore = events.length - recent.length;
+    const turns: DeliveredMissedTurn[] = [];
+    let budget = MAX_TOTAL_CHARS;
+    for (const event of [...recent].reverse()) {
+      if (turns.length && budget <= 0) {
+        turns.push({
+          sequence: event.sequence,
+          speakerType: event.speakerType,
+          speakerDisplayName: event.speakerDisplayName,
+          displayText: `[Turn ${event.sequence} — ${event.speakerDisplayName} — not delivered here for length; read it with the record tool]`,
+          omittedForLength: true,
+        });
+        continue;
+      }
+      if (event.authoredMessage.length > MAX_TURN_CHARS) {
+        turns.push({
+          sequence: event.sequence,
+          speakerType: event.speakerType,
+          speakerDisplayName: event.speakerDisplayName,
+          displayText: `[Turn ${event.sequence} — ${event.speakerDisplayName}, ${event.authoredMessage.length.toLocaleString("en-US")} characters — too long for delivery; read it with the record tool]`,
+          omittedForLength: true,
+        });
+        continue;
+      }
+      const recovered = this.recoveredCanonicalTurn(conversation, event);
+      const displayText = event.fidelity === "canonical_source_agent"
+        ? recovered.displayText
+        : `${event.speakerDisplayName}: ${event.authoredMessage}`;
+      budget -= displayText.length;
+      turns.push({
+        sequence: event.sequence,
+        speakerType: event.speakerType,
+        speakerDisplayName: event.speakerDisplayName,
+        displayText,
+      });
+    }
+    turns.reverse();
+    if (omittedBefore > 0) {
+      turns.unshift({
+        sequence: events[0]!.sequence,
+        speakerType: events[0]!.speakerType,
+        speakerDisplayName: events[0]!.speakerDisplayName,
+        displayText: `[${omittedBefore} earlier missed turn${omittedBefore === 1 ? "" : "s"} (from sequence ${events[0]!.sequence}) not delivered here; read them with the record tool]`,
+        omittedForLength: true,
+      });
+    }
+    return turns;
+  }
+
+  // The cure for a resuming or returning host's blindness: page through the
+  // canonical record verbatim. Read-only; text is never truncated —
+  // pagination bounds volume, not fidelity.
+  async readRecord(input: { conversationToken: string; afterCursor?: number; maxTurns?: number }): Promise<ReadRecordResult> {
+    const afterCursor = input.afterCursor ?? 0;
+    if (!Number.isInteger(afterCursor) || afterCursor < 0) throw new Error("Record cursor must be a non-negative integer");
+    const maxTurns = Math.min(100, Math.max(1, Math.trunc(input.maxTurns ?? 30)));
+    const conversation = await this.store.getConversation(input.conversationToken);
+    const stored = await this.store.readConversationEvents(conversation.conversationToken);
+    const page = stored.filter((event) => event.sequence > afterCursor).slice(0, maxTurns);
+    const nextCursor = page.at(-1)?.sequence ?? afterCursor;
+    return {
+      conversationToken: conversation.conversationToken,
+      afterCursor,
+      totalEvents: conversation.lastSequence,
+      turns: page.map((event) => ({
+        sequence: event.sequence,
+        speakerType: event.speakerType,
+        speakerDisplayName: event.speakerDisplayName,
+        text: event.authoredMessage,
+      })),
+      nextCursor,
+      done: nextCursor >= conversation.lastSequence,
     };
   }
 
@@ -475,8 +604,13 @@ export class ConversationService {
     if (this.invocationsInFlight.has(conversation.conversationToken)) {
       throw new Error("A source-agent invocation is already in progress for this host conversation");
     }
-    if (input.throughCursor !== conversation.lastSequence) {
-      throw new Error(`Invoke against the latest acknowledged conversation cursor ${conversation.lastSequence}`);
+    // B2-solo: throughCursor is advisory — it reports what this host has
+    // seen, not a write position. A host that is BEHIND the head is normal
+    // (another connected chat advanced the seminar); agents read the full
+    // record server-side regardless. Running AHEAD of the record is still
+    // host confusion worth failing fast on.
+    if (input.throughCursor > conversation.lastSequence) {
+      throw new Error(`Conversation cursor runs ahead of the record: server cursor is ${conversation.lastSequence}, host supplied ${input.throughCursor}`);
     }
     const initialEvents = await this.store.readConversationEvents(conversation.conversationToken);
     if (initialEvents.at(-1)?.speakerType !== "user") {
@@ -503,15 +637,14 @@ export class ConversationService {
       this.invocationsInFlight.add(conversation.conversationToken);
       try {
         const speakerDisplayName = input.visibleHostDisplayName?.trim() || "Host";
-        const sequence = conversation.lastSequence + 1;
-        await this.store.appendConversationEvent(conversation.conversationToken, {
-          sequence,
+        const [recorded] = await this.store.appendConversationEventsAtHead(conversation.conversationToken, [{
           speakerType: "host",
           speakerDisplayName,
           authoredMessage: input.visibleHostMessage,
           fidelity: "canonical_host_address",
           captureMethod: "host_authored_tool_message",
-        });
+        }]);
+        const sequence = recorded!.sequence;
         conversation.lastSequence = sequence;
         conversation.updatedAt = new Date().toISOString();
         await this.store.saveConversation(conversation);
@@ -579,16 +712,15 @@ export class ConversationService {
     try {
       if (addressMode === "visible_host") {
         const authoredMessage = input.visibleHostMessage!;
-        const hostSequence = conversation.lastSequence + 1;
         const speakerDisplayName = input.visibleHostDisplayName?.trim() || "Host";
-        const hostEvent = await this.store.appendConversationEvent(conversation.conversationToken, {
-          sequence: hostSequence,
+        const [hostEvent] = await this.store.appendConversationEventsAtHead(conversation.conversationToken, [{
           speakerType: "host",
           speakerDisplayName,
           authoredMessage,
           fidelity: "canonical_host_address",
           captureMethod: "host_authored_tool_message",
-        });
+        }]);
+        const hostSequence = hostEvent!.sequence;
         conversation.lastSequence = hostSequence;
         conversation.updatedAt = new Date().toISOString();
         await this.store.saveConversation(conversation);
@@ -679,9 +811,7 @@ export class ConversationService {
           if (attempt >= 2 || Date.now() - acquisitionStart > this.slowRetryCutoffMs) throw error;
         }
       }
-      const responseSequence = conversation.lastSequence + 1;
-      await this.store.appendConversationEvent(conversation.conversationToken, {
-        sequence: responseSequence,
+      const [answerEvent] = await this.store.appendConversationEventsAtHead(conversation.conversationToken, [{
         speakerType: "source_agent",
         speakerDisplayName: agent.displayName,
         speakerAgentId: agent.agentId,
@@ -693,10 +823,17 @@ export class ConversationService {
           ? { maxDirectQuoteWords: envelope.responseConstraints.maxDirectQuoteWords }
           : {}),
         responseEnvelope: response,
-      });
+      }]);
+      const responseSequence = answerEvent!.sequence;
       conversation.lastSequence = responseSequence;
       conversation.updatedAt = new Date().toISOString();
-      state.lastDeliveredSequence = responseSequence;
+      // If foreign turns landed between this agent's delivery snapshot and
+      // its answer (another connected chat writing mid-generation), do not
+      // let the delivery cursor vault over them: park it at what was
+      // actually delivered so the next invocation carries the gap. The
+      // agent re-receiving its own answer as room context is harmless; an
+      // agent silently missing room turns is not.
+      state.lastDeliveredSequence = responseSequence === throughSequence + 1 ? responseSequence : throughSequence;
       state.updatedAt = conversation.updatedAt;
       await this.store.saveConversation(conversation);
       deliveries.push({

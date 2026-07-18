@@ -159,6 +159,19 @@ export class GrantResolvingStore implements ConversationStore {
     return { ...event, conversationToken };
   }
 
+  async appendConversationEventsAtHead(
+    conversationToken: string,
+    inputs: Array<Omit<ConversationEvent, "schemaVersion" | "eventId" | "createdAt" | "contentHash" | "conversationToken" | "sequence">>,
+  ): Promise<ConversationEvent[]> {
+    const grant = await this.resolution(conversationToken);
+    if (!grant) return this.inner.appendConversationEventsAtHead(conversationToken, inputs);
+    const events = await this.inner.appendConversationEventsAtHead(
+      grant.conversationToken,
+      inputs.map((input) => ({ ...input, viaGrantId: grant.id })),
+    );
+    return events.map((event) => ({ ...event, conversationToken }));
+  }
+
   async readConversationEvents(conversationToken: string): Promise<ConversationEvent[]> {
     const grant = await this.resolution(conversationToken);
     if (!grant) return this.inner.readConversationEvents(conversationToken);

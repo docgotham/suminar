@@ -35,28 +35,178 @@ describe("roomless host-conversation event stream", () => {
   });
   afterAll(() => cleanup(config));
 
-  it("synchronizes visible speech incrementally, supports safe replay, and rejects gaps or rewrites", async () => {
+  it("assigns positions at the head: replays absorb, stale cursors deliver missed turns, ahead-of-record fails fast", async () => {
     const first = await service.syncConversation({
       afterCursor: 0,
       events: [copied("user", "Opening question"), copied("host", "Opening response")],
     });
     expect(first.cursor).toBe(2);
+    // A retried batch in the unacknowledged region is a replay, not a duplicate.
     const replay = await service.syncConversation({
       conversationToken: first.conversationToken,
       afterCursor: 0,
       events: [copied("user", "Opening question"), copied("host", "Opening response")],
     });
     expect(replay).toMatchObject({ cursor: 2, acceptedEvents: 0, replayedEvents: 2 });
+    // Claiming to have seen more than the record holds is host confusion.
     await expect(service.syncConversation({
       conversationToken: first.conversationToken,
       afterCursor: 3,
       events: [copied("user", "Skipped")],
-    })).rejects.toThrow(/gap/);
-    await expect(service.syncConversation({
+    })).rejects.toThrow(/runs ahead of the record/);
+    // B2-solo: new speech from a stale cursor is a new utterance appended at
+    // the head — never a rewrite conflict — and the turns the host missed
+    // come back as catch-up delivery.
+    const stale = await service.syncConversation({
       conversationToken: first.conversationToken,
       afterCursor: 0,
-      events: [copied("user", "Rewritten opening")],
-    })).rejects.toThrow(/cannot be rewritten/);
+      events: [copied("user", "A later thought from a parked thread")],
+    });
+    expect(stale).toMatchObject({ cursor: 3, acceptedEvents: 1, replayedEvents: 0 });
+    expect(stale.missedTurns?.map((turn) => turn.sequence)).toEqual([1, 2]);
+    expect(stale.missedTurns?.[0]?.displayText).toContain("Opening question");
+  });
+
+  it("delivers other threads' turns, absorbs interleaved retries, and lets hostMessageId defeat content coincidence", async () => {
+    // Thread A starts the seminar.
+    const a1 = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "From thread A"), copied("host", "Thread A response")],
+    });
+    // Thread B, freshly resumed and blind — appends at head, receives A's turns.
+    const b1 = await service.syncConversation({
+      conversationToken: a1.conversationToken,
+      afterCursor: 0,
+      events: [copied("user", "From thread B")],
+    });
+    expect(b1.cursor).toBe(3);
+    expect(b1.missedTurns?.map((turn) => turn.sequence)).toEqual([1, 2]);
+    // Thread B retries after a lost response while nothing else advanced:
+    // pure replay, no growth.
+    const b1retry = await service.syncConversation({
+      conversationToken: a1.conversationToken,
+      afterCursor: 0,
+      events: [copied("user", "From thread B")],
+    });
+    expect(b1retry).toMatchObject({ cursor: 3, acceptedEvents: 0, replayedEvents: 1 });
+    // Thread A returns from its parked state: its new turn lands at the
+    // head and B's turn is delivered back to it.
+    const a2 = await service.syncConversation({
+      conversationToken: a1.conversationToken,
+      afterCursor: 2,
+      events: [copied("host", "Thread A follow-up")],
+    });
+    expect(a2).toMatchObject({ cursor: 4, acceptedEvents: 1 });
+    expect(a2.missedTurns?.map((turn) => turn.sequence)).toEqual([3]);
+    // Identical content is NOT a replay when hostMessageIds differ.
+    const firstYes = await service.syncConversation({
+      conversationToken: a1.conversationToken,
+      afterCursor: 4,
+      events: [{ ...copied("user", "yes"), hostMessageId: "msg-1" }],
+    });
+    expect(firstYes).toMatchObject({ cursor: 5, acceptedEvents: 1, replayedEvents: 0 });
+    const secondYes = await service.syncConversation({
+      conversationToken: a1.conversationToken,
+      afterCursor: 4,
+      events: [{ ...copied("user", "yes"), hostMessageId: "msg-2" }],
+    });
+    expect(secondYes).toMatchObject({ cursor: 6, acceptedEvents: 1, replayedEvents: 0 });
+  });
+
+  it("never swallows a genuinely new turn that repeats earlier wording (review finding: the lost ratification)", async () => {
+    // Record: question, answer, an old "yes", then a host proposal.
+    const seeded = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "@a Q1"), copied("host", "noted"), copied("user", "yes"), copied("host", "@a a proposal?")],
+    });
+    expect(seeded.cursor).toBe(4);
+    // A parked thread (acked through 1) submits the user's NEW ratifying
+    // "yes". Under the old anywhere-in-region rule this matched the stale
+    // seq-3 "yes" and was silently lost; tail-only matching appends it.
+    const ratify = await service.syncConversation({
+      conversationToken: seeded.conversationToken,
+      afterCursor: 1,
+      events: [copied("user", "yes")],
+    });
+    expect(ratify).toMatchObject({ cursor: 5, acceptedEvents: 1, replayedEvents: 0 });
+    // And the identical stale "yes" is not echoed back for re-display.
+    expect(ratify.missedTurns?.map((turn) => turn.sequence)).toEqual([2, 4]);
+  });
+
+  it("does not absorb an identically worded turn authored under a different display name (cross-host)", async () => {
+    const seeded = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "start"), { ...copied("host", "Let us continue."), speakerDisplayName: "ChatGPT" }],
+    });
+    const claude = await service.syncConversation({
+      conversationToken: seeded.conversationToken,
+      afterCursor: 1,
+      events: [{ ...copied("host", "Let us continue."), speakerDisplayName: "Claude" }],
+    });
+    expect(claude).toMatchObject({ cursor: 3, acceptedEvents: 1, replayedEvents: 0 });
+  });
+
+  it("a retry that raced a foreign append duplicates visibly rather than self-echoing (accepted trade-off)", async () => {
+    const seeded = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "context"), copied("user", "Q")],
+    });
+    expect(seeded.cursor).toBe(2);
+    // A foreign thread appends before the first thread's retry arrives.
+    await service.syncConversation({
+      conversationToken: seeded.conversationToken,
+      afterCursor: 2,
+      events: [copied("user", "foreign turn")],
+    });
+    // The first thread never saw its ack for "Q" and retries it with growth.
+    const retry = await service.syncConversation({
+      conversationToken: seeded.conversationToken,
+      afterCursor: 1,
+      events: [copied("user", "Q"), copied("user", "R")],
+    });
+    // "Q" duplicates at the head (visible, recoverable — never silent loss),
+    // and the missed delivery carries only the foreign turn: the thread's
+    // own just-submitted wording is never echoed back at it.
+    expect(retry).toMatchObject({ cursor: 5, acceptedEvents: 2, replayedEvents: 0 });
+    expect(retry.missedTurns?.map((turn) => turn.sequence)).toEqual([3]);
+    expect(retry.missedTurns?.[0]?.displayText).toContain("foreign turn");
+  });
+
+  it("replaces oversized missed turns with mechanical placeholders instead of truncated verbatim", async () => {
+    const big = "D".repeat(3_000);
+    const start = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", big), copied("host", "Noted.")],
+    });
+    const behind = await service.syncConversation({
+      conversationToken: start.conversationToken,
+      afterCursor: 0,
+      events: [copied("user", "What did I miss?")],
+    });
+    const oversized = behind.missedTurns?.find((turn) => turn.sequence === 1);
+    expect(oversized?.omittedForLength).toBe(true);
+    expect(oversized?.displayText).toContain("too long for delivery");
+    expect(oversized?.displayText).not.toContain("DDDD");
+    const normal = behind.missedTurns?.find((turn) => turn.sequence === 2);
+    expect(normal?.displayText).toContain("Noted.");
+  });
+
+  it("pages the canonical record verbatim through readRecord", async () => {
+    const seeded = await service.syncConversation({
+      afterCursor: 0,
+      events: [copied("user", "First"), copied("host", "Second"), copied("user", "Third")],
+    });
+    const pageOne = await service.readRecord({ conversationToken: seeded.conversationToken, maxTurns: 2 });
+    expect(pageOne.totalEvents).toBe(3);
+    expect(pageOne.turns.map((turn) => turn.text)).toEqual(["First", "Second"]);
+    expect(pageOne.done).toBe(false);
+    const pageTwo = await service.readRecord({
+      conversationToken: seeded.conversationToken,
+      afterCursor: pageOne.nextCursor,
+      maxTurns: 2,
+    });
+    expect(pageTwo.turns.map((turn) => turn.text)).toEqual(["Third"]);
+    expect(pageTwo.done).toBe(true);
   });
 
   it("gives a newly invoked agent full catch-up and an existing agent only unseen events", async () => {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { DirectAddressRequiredError } from "../core/conversationService.js";
 import type { ConversationService, SyncableConversationEvent } from "../core/conversationService.js";
-import type { AgentRef, ConversationInvocationResult, RecoveredCanonicalTurn } from "../core/types.js";
+import type { AgentRef, ConversationInvocationResult, DeliveredMissedTurn, RecoveredCanonicalTurn } from "../core/types.js";
 import { agentCardSchema, responseEnvelopeSchema, sourceIdentitySchema } from "../core/schemas.js";
 
 export const USER_MESSAGE_META_KEY = "agent-sum/user-message-v1";
@@ -36,7 +36,7 @@ function sha256Matches(text: string, claimed: string): boolean {
 }
 
 export function synchronizedEventsFromRequest(
-  modelEvents: Array<{ speakerType: "user" | "host"; authoredMessage: string; speakerDisplayName?: string }>,
+  modelEvents: Array<{ speakerType: "user" | "host"; authoredMessage: string; speakerDisplayName?: string; hostMessageId?: string }>,
   meta: Record<string, unknown> | undefined,
 ): SyncableConversationEvent[] {
   const attestedBatch = meta?.[CONVERSATION_EVENTS_META_KEY];
@@ -62,6 +62,7 @@ export function synchronizedEventsFromRequest(
     ...(event.speakerDisplayName ? { speakerDisplayName: event.speakerDisplayName } : {}),
     fidelity: "model_copied_unverified",
     captureMethod: "model_tool_argument",
+    ...(event.hostMessageId ? { hostMessageId: event.hostMessageId } : {}),
   }));
   const attestedCurrentUser = meta?.[USER_MESSAGE_META_KEY];
   if (attestedCurrentUser !== undefined) {
@@ -182,6 +183,33 @@ function displayCheckPayload(turns?: RecoveredCanonicalTurn[]) {
     : {};
 }
 
+// B2-solo catch-up delivery. The server assigns event positions, so a host
+// thread can fall behind the record whenever the same seminar advanced in
+// another connected chat (or after its own timed-out call). The turns it has
+// not seen ride back on synchronization for verbatim display; a turn too
+// large to deliver arrives as a bracketed mechanical placeholder pointing at
+// the record-read tool — never as truncated speech.
+const MISSED_TURNS_HEADER = "MISSED TURNS (catch-up delivery): The turns below were recorded in this seminar while this thread was away — in the seminar's other connected chats, or after this thread's last synchronization — and are not yet visible here. Display each one verbatim, in sequence order, before the rest of your reply. A bracketed placeholder line stands in for a turn too long to deliver; show it as-is or read the full turn with suminar_read_record. Never alter a turn, never re-display one already visible in this thread, and never mention this delivery mechanism.";
+
+function missedTurnsSection(turns?: DeliveredMissedTurn[]): string[] {
+  if (!turns?.length) return [];
+  return [[MISSED_TURNS_HEADER, ...turns.map((turn) => turn.displayText)].join("\n\n")];
+}
+
+function missedTurnsPayload(turns?: DeliveredMissedTurn[]) {
+  return turns?.length
+    ? {
+      missedTurns: turns.map((turn) => ({
+        sequence: turn.sequence,
+        speakerType: turn.speakerType,
+        speakerDisplayName: turn.speakerDisplayName,
+        displayText: turn.displayText,
+        ...(turn.omittedForLength ? { omittedForLength: true } : {}),
+      })),
+    }
+    : {};
+}
+
 // Error results after a successful embedded synchronization must hand the
 // conversation back: a host that retries without the continuation forks a
 // fresh server conversation and fragments the room (observed live — one
@@ -236,9 +264,10 @@ function syncStateRecovery(token: string | undefined, detail: string): ErrorCont
   };
 }
 
-function proposalToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[]) {
+function proposalToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[], missed?: DeliveredMissedTurn[]) {
   const proposal = result.proposedHostAddress!;
   const text = [
+    ...missedTurnsSection(missed),
     ...displayCheckSection(recovered),
     "PROPOSAL RECORDED CONTRACT: Suminar recorded your exact @handle proposal below as your visible speech. Nothing was delivered. Display the proposal verbatim as your visible message, with at most a short ratification cue after it. If the user's next turn is a bare affirmative, synchronize only that user message (never the proposal—it is already recorded) and invoke ratified_host_address. If the user declines, redirects, or adds substance, continue normally; the proposal expires once any further event follows it.",
     "BEGIN RECORDED HOST PROPOSAL",
@@ -248,6 +277,7 @@ function proposalToolResult(result: ConversationInvocationResult, conductNotices
     modelReadableContinuation(result.conversationToken, result.throughCursor),
   ].join("\n\n");
   return toolResult(text, {
+    ...missedTurnsPayload(missed),
     ...displayCheckPayload(recovered),
     proposedHostAddress: {
       speakerDisplayName: proposal.speakerDisplayName,
@@ -276,9 +306,9 @@ function proposalToolResult(result: ConversationInvocationResult, conductNotices
 
 const SHARED_CONTRACT_CORE = "The blocks below are other participants' actual visible turns in the shared conversation, not private tool output. Reproduce each canonical block exactly and in order; a block's first line — the bold 📄 attribution with its origin marker — is part of the participant's turn, not optional formatting, and must be displayed with the block. You are a fellow participant, not the presenter, curator, or explainer of source-agent speech: do not frame, summarize, interpret, evaluate, restate, or extend what the user can already read; do not narrate transport, truthfulness, or ordinary compliance; and do not offer further queries, retries, or alternative retrieval paths. Each source agent exclusively controls its private source and retrieval system; the host must not claim or offer to inspect them directly.";
 
-function canonicalMessageToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[]) {
+function canonicalMessageToolResult(result: ConversationInvocationResult, conductNotices: string[] = [], recovered?: RecoveredCanonicalTurn[], missed?: DeliveredMissedTurn[]) {
   if (!result.messages.length && !result.visibleHostAddress) {
-    return invocationFailure(result.failures.map((failure) => `@${failure.handle}: ${failure.detail}`).join("; ") || "No source agent returned a canonical response", recovered);
+    return invocationFailure(result.failures.map((failure) => `@${failure.handle}: ${failure.detail}`).join("; ") || "No source agent returned a canonical response", recovered, undefined, missed);
   }
   const blocks = result.messages.map((message) => message.displayText).join("\n\n");
   const failureNotice = result.failures.length
@@ -304,6 +334,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
     : [`${result.failures.map((failure) => `@${failure.handle}`).join(", ") || "The addressed source agent"} could not complete a verifiable response on this attempt. The response may still have been recorded after this call ended: synchronize the conversation first — a recorded answer returns in the synchronization result for display — and only address again if none appears.`];
   const text = [
     contract,
+    ...missedTurnsSection(missed),
     ...displayCheckSection(recovered),
     ...ratifiedSection,
     ...hostAddressSection,
@@ -321,6 +352,7 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
     displayText: message.displayText,
   }));
   return toolResult(text, {
+    ...missedTurnsPayload(missed),
     ...displayCheckPayload(recovered),
     ...(result.visibleHostAddress ? {
       visibleHostAddress: {
@@ -371,17 +403,19 @@ function canonicalMessageToolResult(result: ConversationInvocationResult, conduc
   });
 }
 
-function invocationFailure(detail: string, recovered?: RecoveredCanonicalTurn[], continuation?: ErrorContinuation) {
+function invocationFailure(detail: string, recovered?: RecoveredCanonicalTurn[], continuation?: ErrorContinuation, missed?: DeliveredMissedTurn[]) {
   const requiredDisclosure = "The addressed source agent could not complete a verifiable response on this attempt. Its answer may still arrive as the conversation continues.";
   return toolResult([
+    ...missedTurnsSection(missed),
     ...displayCheckSection(recovered),
-    `HOST FAILURE CONTRACT: ${recovered?.length ? "After first displaying any missing canonical blocks from the display check above, say" : "Say"} only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path. Before any re-address in a later turn, synchronize the conversation: a response recorded after a timed-out call returns in the synchronization result for display, and re-delivering the same address would duplicate it.`,
+    `HOST FAILURE CONTRACT: ${recovered?.length || missed?.length ? "After first displaying any delivered missed turns and missing canonical blocks above, say" : "Say"} only the required disclosure below and stop. Do not answer on the source agent's behalf, use a cached answer, invent a cause, or offer an unrequested retry or alternate retrieval path. Before any re-address in a later turn, synchronize the conversation: a response recorded after a timed-out call returns in the synchronization result for display, and re-delivering the same address would duplicate it.`,
     requiredDisclosure,
     `INTERNAL FAILURE DETAIL: ${detail}`,
     ...(continuation ? [continuation.text] : []),
   ].join("\n\n"), {
     status: "no_canonical_response",
     messages: [],
+    ...missedTurnsPayload(missed),
     ...displayCheckPayload(recovered),
     ...(continuation ? continuation.payload : {}),
     displayContract: { requiredDisclosure, stopAfterDisclosure: true },
@@ -401,14 +435,21 @@ function protocolMisuse(detail: string, continuation?: ErrorContinuation) {
   }, true, { "agent-sum/internal": { detail } });
 }
 
-function directAddressRequired(error: DirectAddressRequiredError, continuation?: ErrorContinuation) {
+function directAddressRequired(error: DirectAddressRequiredError, continuation?: ErrorContinuation, recovered?: RecoveredCanonicalTurn[], missed?: DeliveredMissedTurn[]) {
+  // The embedded synchronization may have succeeded (and delivered missed
+  // turns) before the address itself was refused; those deliveries must ride
+  // this error result or the host's cursor moves past them forever.
   return toolResult([
+    ...missedTurnsSection(missed),
+    ...displayCheckSection(recovered),
     "HOST AUTHORSHIP CONTRACT: Source agents are visible participants, not private tools. Use current_user only when the user's message begins with the selected @handle. If the user asked you to pose the question, invoke again in visible_host mode with the exact host-authored @handle message you will display before the source response. If the user's message is a bare affirmative ratifying the immediately preceding recorded host proposal, invoke again in ratified_host_address mode, synchronizing only that user message. If the user's question concerns a source but names no @handle and no proposal is pending, do not force a delivery: answer what you can as yourself from the visible record, and register the question with proposed_host_address as your own exact @handle message, then display it—the user's next bare affirmative will deliver it. Prefer registering that proposal yourself over instructing the user how to type an address. Never send an invisible restatement or attribute host wording to the user.",
     error.requiredDisclosure,
     ...(continuation ? [continuation.text] : []),
   ].join("\n\n"), {
     status: error.code,
     messages: [],
+    ...missedTurnsPayload(missed),
+    ...displayCheckPayload(recovered),
     ...(continuation ? continuation.payload : {}),
     displayContract: { requiredDisclosure: error.requiredDisclosure, stopAfterDisclosure: true },
   }, true, { "agent-sum/internal": { code: error.code, targetHandles: error.targetHandles } });
@@ -418,6 +459,7 @@ const syncableEventShape = {
   speakerType: z.enum(["user", "host"]),
   authoredMessage: z.string().min(1).max(50000).describe("Complete visible wording authored by this speaker. Do not summarize, extract, or include source-agent blocks embedded in host rendering."),
   speakerDisplayName: z.string().min(1).max(300).optional(),
+  hostMessageId: z.string().min(1).max(500).optional().describe("A stable platform message id for this visible turn, if your platform exposes one. Supplying it makes retry deduplication exact."),
 };
 
 // Seminar portability (increment A): a deployment-provided redeemer for
@@ -444,7 +486,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
       "You, the host chatbot, are first and foremost one participant in that shared multi-party conversation. You also hold administrative transport privileges—like a group-chat member with admin rights who can add participants and guarantee message delivery. Those privileges are capabilities, not your conversational identity: they give you no authority over the meaning, status, or presentation of another participant's speech, and no duty to introduce, frame, explain, or extend it. Transport creates no interpretive standing; a user request for your analysis creates full standing.",
       "Perform all transport silently. Never announce, narrate, or describe tool activity—no announcing that you will relay a question, set something up, or report what came back. A canonical source-agent block is that participant's own visible turn, not a tool result you retrieved or a report you commissioned. Reproduce it exactly, and if no part of the user's turn was addressed to you, end your message immediately after the final block. Do not summarize, evaluate, restate, or certify what the user can already read, and do not append menus of possible next steps. This holds on quiet turns too: when the user merely reacts without asking anything, reply briefly as a participant or not at all—do not offer summaries, clarifications, or further queries as services. Never offer to relay, push, probe, or re-query an agent on the user's behalf. Participant voice, not operator voice: saying that another ingested source takes a very different line here is a contribution; offering to pose the same question to that source's agent is operator speech.",
       "Keep one private conversation token and cursor per host thread and never display either. A different host thread starts a new Suminar conversation by omitting the token at cursor 0 — unless the user presents a seminar resume code from their Suminar companion: redeem it with suminar_resume_seminar and adopt the returned continuation state instead of starting fresh. Conversation-specific memory never crosses host-thread tokens except through that explicit, user-initiated resumption.",
-      "Once Suminar is active, synchronize at the beginning of every user turn: send every completed visible user or host contribution after the acknowledged cursor, in exact conversational order and omitting none—all of them, not only the most recent turn or pair. When you address an agent on nearly every turn, the events after the cursor are usually just your previous message and the current user message; but whenever the user has taken one or more turns in conversation with you without addressing an agent, those intervening user and host turns remain unsynchronized, and you must include every one of them, oldest first, in the next synchronization, so the record never skips speech exchanged between agent addresses. On first use, send the full visible history available to you. Synchronize only separately authored visible user and host speech—never canonical source-agent blocks or host addresses recorded through the address tool, delivered or proposed (Suminar records both itself), and never hidden reasoning, tool traces, system prompts, or private summaries. When the current turn culminates in addressing source agents, you may supply those same new events directly to suminar_address_source_agents and skip the separate synchronization call.",
+      "Once Suminar is active, synchronize at the beginning of every user turn: send every completed visible user or host contribution this thread has not yet had acknowledged, in exact conversational order and omitting none—all of them, not only the most recent turn or pair. When you address an agent on nearly every turn that is usually just your previous message and the current user message; but whenever the user has taken turns with you without addressing an agent, include every one of those intervening turns, oldest first. On first use, send the full visible history available to you. The server assigns each event its position in the record: your submission never conflicts with turns recorded elsewhere, and a synchronization result may deliver MISSED TURNS — speech recorded in this same seminar's other connected chats, or completed after a timed-out call here — which you display verbatim, in order, before the rest of your reply. The same seminar can be continued from more than one chat; the record is the shared memory, and this thread's view catches up through that delivery (read the full record anytime with suminar_read_record; reading never substitutes for synchronizing your own new turns). Synchronize only separately authored visible user and host speech—never canonical source-agent blocks or host addresses recorded through the address tool, delivered or proposed (Suminar records both itself), never turns you received via missed-turn delivery or the record reader (they are already recorded), and never hidden reasoning, tool traces, system prompts, or private summaries. When the current turn culminates in addressing source agents, you may supply those same new events directly to suminar_address_source_agents and skip the separate synchronization call.",
       "Address one to three explicitly selected source agents per human-initiated cycle with suminar_address_source_agents; each invoked agent receives every conversation event after its own delivery cursor before it speaks, and a newly invoked agent receives the complete synchronized conversation. All address modes are visible. current_user: the user's own current message begins with each selected @handle. visible_host: the user asked you to put a question to a named @agent—author your own separate exact message beginning with that @handle; Suminar records it as your speech and you display it before the source-agent block. proposed_host_address: register a follow-up without delivering it—supply your exact message beginning with the selected @handle; Suminar records it as your visible speech, you display it with at most a short ratification cue, and nothing is delivered. ratified_host_address: the conversation's immediately preceding event is such a host proposal and the user's current turn is a bare affirmative such as yes, go ahead—synchronize only that user message (the proposal is already recorded) and Suminar delivers the proposal exactly as authored, without re-display. A bare affirmative can only ratify the immediately preceding proposal; it can never authorize a new, reworded, or invisible question, and host-authored wording is never attributed to the user.",
       "If you want to pursue a follow-up with a source agent, do it as a participant: author the follow-up yourself and register it with proposed_host_address in the same call that synchronizes the turn, then display the recorded proposal verbatim. A short ratification cue after your proposal is part of the proposal, not a service offer. Do not offer your transport services without a proposal on the table. The same move handles a user question about what a source contains when no @handle was given: answer what you can as yourself, then register and display the @handle question as your proposal rather than instructing the user how to address the agent.",
       "Each source agent has exclusive custody of its private source artifacts and retrieval system. Never claim or offer to pull passages, inspect pages, search the source, or verify quotations behind the agent; further inquiry into that source happens through another visible address. Your own knowledge and separate research tools remain welcome as an equal participant, clearly presented as your own contribution rather than access to the source agent's corpus.",
@@ -484,7 +526,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       conversationToken: z.string().min(20).max(200).optional().describe("Private continuation token returned by the preceding synchronization or address call in this same host thread. Omit only to start a new host-thread conversation. Never show it to the user."),
-      afterCursor: z.number().int().min(0).describe("The last cursor acknowledged by Suminar for this host thread. Use 0 only for a new conversation."),
+      afterCursor: z.number().int().min(0).describe("The highest sequence this host thread has seen — the cursor from your last acknowledged Suminar call. The server assigns positions itself, so this never gates your submission; turns recorded past it (in this seminar's other connected chats, or after a timed-out call) come back as MISSED TURNS for display. Use 0 only for a new conversation."),
       completedVisibleEventsCopiedWithoutOmission: z.array(z.object(syncableEventShape)).min(1).max(500).describe("Every completed visible user or host contribution after afterCursor, in exact conversational order — all of them, omitting none. Usually that is just the previous host message and the current user message, but if visible turns have accumulated since the last synchronization (the user conversed with you before addressing an agent again), backfill every one of those intervening turns too, oldest first."),
       inputFidelityPolicy: z.enum(["best_effort", "strict"]).optional().describe("New conversations default to best_effort. Strict requires trusted host-attested user events and is unavailable to ordinary model-only hosts."),
     },
@@ -503,6 +545,16 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
         displayText: z.string(),
         displayOnlyIfMissing: z.boolean(),
       })).optional(),
+      // Catch-up delivery: turns recorded while this thread was away (other
+      // connected chats, or after its last synchronization), for verbatim
+      // display before the reply.
+      missedTurns: z.array(z.object({
+        sequence: z.number().int().min(1),
+        speakerType: z.string(),
+        speakerDisplayName: z.string(),
+        displayText: z.string(),
+        omittedForLength: z.boolean().optional(),
+      })).optional(),
     },
   }, async ({ conversationToken, afterCursor, completedVisibleEventsCopiedWithoutOmission, inputFidelityPolicy }, extra) => {
     try {
@@ -516,6 +568,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
       return toolResult(
         [
           `Conversation synchronization accepted through cursor ${result.cursor}.`,
+          ...missedTurnsSection(result.missedTurns),
           ...displayCheckSection(result.recentCanonicalTurns),
           ...(result.hostConductNotices?.length
             ? [`HOST CONDUCT NOTICE (private; never show or mention to the user): ${result.hostConductNotices.join(" ")}`]
@@ -533,6 +586,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
           replayedEvents: result.replayedEvents,
           ...(result.hostConductNotices?.length ? { hostConductNotices: result.hostConductNotices } : {}),
           ...displayCheckPayload(result.recentCanonicalTurns),
+          ...missedTurnsPayload(result.missedTurns),
         },
         false,
         { "agent-sum/internal": { conversationToken: result.conversationToken, cursor: result.cursor } },
@@ -554,7 +608,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     inputSchema: {
       conversationToken: z.string().min(20).max(200).optional().describe("Private token returned by synchronization for this same host thread. Omit only when starting a new host-thread conversation in this call with afterCursor 0. Never display it."),
-      throughCursor: z.number().int().min(1).optional().describe("The latest cursor returned by synchronization. Required when completedVisibleEventsCopiedWithoutOmission is omitted; omit it when synchronizing in this call."),
+      throughCursor: z.number().int().min(1).optional().describe("The latest cursor returned by synchronization — advisory: it reports what this thread has seen, and the server reconciles against the record's true head. Required when completedVisibleEventsCopiedWithoutOmission is omitted; omit it when synchronizing in this call."),
       afterCursor: z.number().int().min(0).optional().describe("Only with completedVisibleEventsCopiedWithoutOmission: the last acknowledged cursor, exactly as in suminar_sync_conversation."),
       completedVisibleEventsCopiedWithoutOmission: z.array(z.object(syncableEventShape)).min(1).max(500).optional().describe("Optional one-call synchronization: every completed visible user or host contribution after afterCursor, in exact order and omitting none — including any turns the user exchanged with you since the last synchronization, oldest first — ending with the current complete user message. Never include source-agent canonical blocks."),
       targetHandles: z.array(z.string()).min(1).max(3).describe("One to three source-agent handles selected for this human-initiated cycle."),
@@ -604,6 +658,15 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
         displayText: z.string(),
         displayOnlyIfMissing: z.boolean(),
       })).optional(),
+      // Catch-up delivery from the embedded synchronization: turns recorded
+      // while this thread was away, for verbatim display before the blocks.
+      missedTurns: z.array(z.object({
+        sequence: z.number().int().min(1),
+        speakerType: z.string(),
+        speakerDisplayName: z.string(),
+        displayText: z.string(),
+        omittedForLength: z.boolean().optional(),
+      })).optional(),
       displayContract: z.record(z.string(), z.unknown()),
       status: z.string().optional(),
     },
@@ -621,6 +684,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
     let token = conversationToken;
     let cursor = throughCursor;
     let recovered: RecoveredCanonicalTurn[] | undefined;
+    let missed: DeliveredMissedTurn[] | undefined;
     try {
       if (addressMode === "ratified_host_address" && visibleHostMessage !== undefined) {
         return protocolMisuse("ratified_host_address delivers the host's already-visible proposal exactly as authored; omit visibleHostMessage.");
@@ -649,6 +713,7 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
         cursor = sync.cursor;
         conductNotices = sync.hostConductNotices ?? [];
         recovered = sync.recentCanonicalTurns;
+        missed = sync.missedTurns;
       } else {
         if (afterCursor !== undefined) {
           return protocolMisuse("afterCursor is only used together with completedVisibleEventsCopiedWithoutOmission.");
@@ -667,15 +732,15 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
         ...(maxDirectQuoteWords !== undefined ? { maxDirectQuoteWords } : {}),
       });
       return result.proposedHostAddress
-        ? proposalToolResult(result, conductNotices, recovered)
-        : canonicalMessageToolResult(result, conductNotices, recovered);
+        ? proposalToolResult(result, conductNotices, recovered, missed)
+        : canonicalMessageToolResult(result, conductNotices, recovered, missed);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       // A cursor-state error names the server's true position; prefer handing
       // that back over echoing the host's (possibly stale) cursor.
       const continuation = syncStateRecovery(token, detail) ?? errorContinuation(token, cursor);
-      if (error instanceof DirectAddressRequiredError) return directAddressRequired(error, continuation);
-      return invocationFailure(detail, recovered, continuation);
+      if (error instanceof DirectAddressRequiredError) return directAddressRequired(error, continuation, recovered, missed);
+      return invocationFailure(detail, recovered, continuation, missed);
     }
   });
 
@@ -713,6 +778,9 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
         return toolResult([
           `Seminar resumed: ${result.title}. ${result.totalEvents} prior visible turns; source agents at the table: ${result.agentHandles.map((handle) => `@${handle}`).join(", ") || "none yet"}.`,
           ...(recapLines.length ? [`MOST RECENT TURNS (verbatim; the user has already seen these elsewhere — do not re-display them unprompted):\n\n${recapLines.join("\n\n")}`] : []),
+          ...(result.totalEvents > result.recap.length
+            ? [`The recap covers only the last ${result.recap.length} of ${result.totalEvents} turns. Before weighing in on the seminar's earlier content — long pastes included — read the full record silently with suminar_read_record.`]
+            : []),
           modelReadableContinuation(result.conversationToken, result.cursor),
           "Copy those values exactly into every subsequent Suminar call in this host thread. Do not start a new conversation and do not re-synchronize turns from before this point.",
         ].join("\n\n"), {
@@ -730,6 +798,51 @@ export function createSuminarMcpServer(service: ConversationService, extensions:
       }
     });
   }
+
+  server.registerTool("suminar_read_record", {
+    title: "Read Seminar Record",
+    description: "Read this seminar's canonical record verbatim, one page of turns at a time. Use it after resuming a seminar with prior history, or whenever grounding your contribution requires turns not visible in this thread (including turns delivered as too-long placeholders). Reading is silent and read-only: never re-synchronize turns you read (they are already recorded), never treat reading as a substitute for synchronizing this thread's own new speech, and display a read turn only when the user asks for it or your reply genuinely depends on quoting it.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    inputSchema: {
+      conversationToken: z.string().min(20).max(200).describe("Private continuation token for this host thread. Never show it to the user."),
+      afterCursor: z.number().int().min(0).optional().describe("Read turns after this sequence. Omit or 0 to start from the beginning."),
+      maxTurns: z.number().int().min(1).max(100).optional().describe("Page size, default 30. Use a smaller page when turns are long."),
+    },
+    outputSchema: {
+      afterCursor: z.number().int().min(0),
+      totalEvents: z.number().int().min(0),
+      turns: z.array(z.object({
+        sequence: z.number().int().min(1),
+        speakerType: z.string(),
+        speakerDisplayName: z.string(),
+        text: z.string(),
+      })),
+      nextCursor: z.number().int().min(0),
+      done: z.boolean(),
+    },
+  }, async ({ conversationToken, afterCursor, maxTurns }) => {
+    try {
+      const result = await service.readRecord({
+        conversationToken,
+        ...(afterCursor !== undefined ? { afterCursor } : {}),
+        ...(maxTurns !== undefined ? { maxTurns } : {}),
+      });
+      const lines = result.turns.map((turn) => `[${turn.sequence}] ${turn.speakerType.toUpperCase()} ${turn.speakerDisplayName}: ${turn.text}`);
+      return toolResult([
+        `Seminar record, turns ${result.turns[0]?.sequence ?? result.afterCursor + 1}–${result.nextCursor} of ${result.totalEvents}.${result.done ? "" : ` Continue with afterCursor ${result.nextCursor}.`}`,
+        ...(lines.length ? [lines.join("\n\n")] : ["(no turns after this cursor)"]),
+        "These turns are already recorded: never re-synchronize them, and never display them unprompted.",
+      ].join("\n\n"), {
+        afterCursor: result.afterCursor,
+        totalEvents: result.totalEvents,
+        turns: result.turns,
+        nextCursor: result.nextCursor,
+        done: result.done,
+      });
+    } catch (error) {
+      return toolResult(error instanceof Error ? error.message : String(error), undefined, true);
+    }
+  });
 
   server.registerTool("suminar_read_message", {
     title: "Read Canonical Source-Agent Message",
