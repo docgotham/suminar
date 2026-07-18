@@ -226,27 +226,22 @@
     <!-- ============ gate ============ -->
     <div id="gate">
       <h1>Your account</h1>
-      <p class="sub">Open your account with a connector token — the same
-      credential your chat uses. It stays in this tab and is sent only to
-      suminar.ai.</p>
+      <p class="sub">Sign in with your account email and password. Your
+      credentials stay in this tab and are sent only to suminar.ai.</p>
       <div class="card" style="max-width: 34rem">
-        <label for="gate-token">Connector token</label>
-        <input id="gate-token" type="password" autocomplete="off" placeholder="suminar_…">
-        <div style="margin-top: 1.1rem"><button id="gate-open">Open account</button></div>
-        <p class="status" id="gate-status" role="status"></p>
+        <label for="gate-email">Email</label>
+        <input id="gate-email" type="email" autocomplete="email">
+        <label for="gate-password">Password</label>
+        <input id="gate-password" type="password" autocomplete="current-password">
+        <div style="margin-top: 1.1rem"><button id="gate-signin">Sign in</button></div>
         <details class="recover">
-          <summary>Lost your token? Recover with email and password</summary>
-          <label for="rec-email">Email</label>
-          <input id="rec-email" type="email" autocomplete="email">
-          <label for="rec-password">Password</label>
-          <input id="rec-password" type="password" autocomplete="current-password">
-          <div style="margin-top: 1.1rem"><button id="rec-go" class="ghost">Mint a new token</button></div>
-          <p class="status" id="rec-status" role="status"></p>
-          <div id="rec-reveal" hidden class="reveal">
-            <div class="tokenbox"><code id="rec-token"></code><button type="button" id="rec-copy">Copy</button></div>
-            <p class="warn"><b>Shown once.</b> This token now opens your account below.</p>
-          </div>
+          <summary>Open with a connector token instead</summary>
+          <p class="status" style="margin:.4rem 0 .2rem">The same credential your chat uses — handy if you've forgotten the password.</p>
+          <label for="gate-token">Connector token</label>
+          <input id="gate-token" type="password" autocomplete="off" placeholder="suminar_…">
+          <div style="margin-top: 1.1rem"><button id="gate-open" class="ghost">Open account</button></div>
         </details>
+        <p class="status" id="gate-status" role="status"></p>
         <p class="status" style="margin-top:1rem">No account yet? <a href="/account/redeem">Redeem an invite</a>.</p>
       </div>
     </div>
@@ -348,6 +343,16 @@
         </div>
       </details>
 
+      <details class="card util" id="account-card">
+        <summary>Account</summary>
+        <p class="status" id="acct-email" style="margin:.6rem 0 .2rem"></p>
+        <label for="pw-new">New password</label>
+        <input id="pw-new" type="password" autocomplete="new-password">
+        <label for="pw-confirm">Confirm new password</label>
+        <input id="pw-confirm" type="password" autocomplete="new-password">
+        <div style="margin-top:.8rem"><button class="ghost" type="button" id="pw-change">Change password</button></div>
+        <p class="status" id="pw-status" role="status"></p>
+      </details>
       <details class="card util">
         <summary>Usage <span class="railstat" id="use-stat"></span></summary>
         <div class="usage-grid" id="usage-grid"></div>
@@ -394,7 +399,7 @@
     const headers = new Headers(options.headers || {});
     if (TOKEN) headers.set("authorization", "Bearer " + TOKEN);
     const res = await fetch(path, { ...options, headers });
-    if (res.status === 401) { showGate("That token was not accepted — it may have been revoked."); throw new Error("unauthorized"); }
+    if (res.status === 401) { showGate("Your sign-in was not accepted — the session may have expired or the token been revoked. Sign in again."); throw new Error("unauthorized"); }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error_description || body.error || ("HTTP " + res.status));
     return body;
@@ -412,9 +417,39 @@
     try { sessionStorage.setItem("suminar_token", token); } catch {}
     gate.hidden = true; dash.hidden = false; signout.hidden = false;
     $("companion-controls").hidden = false;
-    await Promise.all([loadDocs(), loadTokens(), loadInvites(), loadUsage()]).catch(() => {});
+    await Promise.all([loadDocs(), loadTokens(), loadInvites(), loadUsage(), loadProfile()]).catch(() => {});
     focusRedeemIfRequested();
   }
+
+  async function loadProfile() {
+    try {
+      const body = await api("/api/account/profile");
+      $("acct-email").textContent = body.email ? "Signed in as " + body.email : "";
+    } catch {
+      // identity line is decorative; never block the dashboard on it
+    }
+  }
+
+  // Change password: the new value goes straight from these fields to the
+  // server over HTTPS and is never stored client-side.
+  $("pw-change").addEventListener("click", async () => {
+    const next = $("pw-new").value;
+    const confirm = $("pw-confirm").value;
+    if (next.length < 8) return setStatus("pw-status", "Use at least 8 characters.", true);
+    if (next !== confirm) return setStatus("pw-status", "The two entries don't match.", true);
+    setStatus("pw-status", "Updating…");
+    try {
+      await api("/api/account/password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ newPassword: next }),
+      });
+      $("pw-new").value = ""; $("pw-confirm").value = "";
+      setStatus("pw-status", "Password updated — it signs you in from now on.");
+    } catch (error) {
+      if (error.message !== "unauthorized") setStatus("pw-status", error.message, true);
+    }
+  });
 
   // Deep link: suminar.ai/account#redeem opens and focuses the redeem box, so
   // the person who sends a code can send a link that lands the recipient
@@ -429,6 +464,30 @@
   window.addEventListener("hashchange", focusRedeemIfRequested);
 
   // ---- gate ----
+  // Password sign-in mints a short-lived web session (12h) that the page
+  // then uses as its bearer, exactly like a token. Plain fetch, not api():
+  // there is no bearer yet, and the failure belongs inline on the gate.
+  $("gate-signin").addEventListener("click", async () => {
+    const email = $("gate-email").value.trim();
+    const password = $("gate-password").value;
+    if (!email || !password) return setStatus("gate-status", "Enter your email and password.", true);
+    setStatus("gate-status", "Signing in…");
+    try {
+      const res = await fetch("/api/account/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return setStatus("gate-status", body.error_description || "Email or password not accepted.", true);
+      $("gate-password").value = "";
+      setStatus("gate-status", "");
+      await enter(body.sessionToken);
+    } catch {
+      setStatus("gate-status", "Could not reach the server.", true);
+    }
+  });
+  $("gate-password").addEventListener("keydown", (event) => { if (event.key === "Enter") $("gate-signin").click(); });
   $("gate-open").addEventListener("click", async () => {
     const token = $("gate-token").value.trim();
     if (!token.startsWith("suminar_")) return setStatus("gate-status", "Connector tokens start with suminar_", true);
@@ -442,38 +501,26 @@
       if (error.message !== "unauthorized") setStatus("gate-status", error.message, true);
     }
   });
-  $("rec-go").addEventListener("click", async () => {
-    setStatus("rec-status", "…");
-    try {
-      TOKEN = null;
-      const body = await api("/api/account/tokens", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: $("rec-email").value.trim(), password: $("rec-password").value, name: "Recovered token" }),
-      });
-      $("rec-token").textContent = body.connectorToken;
-      $("rec-reveal").hidden = false;
-      setStatus("rec-status", "");
-      TOKEN = body.connectorToken;
-      try { sessionStorage.setItem("suminar_token", TOKEN); } catch {}
-      setTimeout(() => enter(TOKEN), 2500);
-    } catch (error) {
-      if (error.message !== "unauthorized") setStatus("rec-status", error.message, true);
-      else setStatus("rec-status", "Sign-in failed — check the email and password.", true);
-    }
+  signout.addEventListener("click", async () => {
+    // Revoke the session server-side, not just locally — a web session must
+    // stop resolving when the user signs out, not linger for 12h.
+    try { await api("/api/account/signout", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); } catch {}
+    showGate();
   });
-  $("rec-copy").addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText($("rec-token").textContent); $("rec-copy").textContent = "Copied"; } catch {}
-  });
-  signout.addEventListener("click", () => showGate());
   // One split control, two window shapes: the label navigates in place
   // (embedded browser panels in the ChatGPT/Claude desktop apps keep the
   // companion in-panel; a pop-out would escape), the glyph segment floats it
   // beside a chatbot in a normal browser. Either way, clicking seeds the
   // companion's persistent sign-in first so it arrives authenticated; the
   // postMessage responder below still serves any popup-opened companion.
+  // Persist only a DURABLE credential into the companion's cross-tab
+  // localStorage. A web session is short-lived (12h) and full-access; writing
+  // it to durable storage would both break the companion at expiry and leave
+  // a powerful credential lingering. A popup companion still receives any
+  // current bearer — session included — over the tab-scoped postMessage
+  // channel below, so the pop-out works without persisting anything.
   const seedCompanion = () => {
-    if (TOKEN) { try { localStorage.setItem("suminar_token", TOKEN); } catch {} }
+    if (TOKEN && TOKEN.startsWith("suminar_")) { try { localStorage.setItem("suminar_token", TOKEN); } catch {} }
   };
   $("open-companion").addEventListener("click", () => {
     seedCompanion();

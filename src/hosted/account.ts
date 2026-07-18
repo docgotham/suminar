@@ -83,6 +83,28 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
     return signup(request, client, config);
   }
 
+  // Password sign-in as a first-class door: mints a short-lived web session
+  // for the account pages. Per-IP gated ahead of any credential check, and
+  // one indistinct failure message — wrong email and wrong password are the
+  // same answer, so the endpoint enumerates nothing.
+  if (request.method === "POST" && resource === "session" && !id) {
+    const decision = await checkHostedRateLimit(client, rules.oauthTokenPerIp, clientIpFromHeaders(request.headers));
+    if (!decision.allowed) return withCors(rateLimitedResponse(decision, "session"));
+    const credentials = await request.json().catch(() => ({})) as Record<string, unknown>;
+    const email = typeof credentials.email === "string" ? credentials.email.trim().toLowerCase() : "";
+    const password = typeof credentials.password === "string" ? credentials.password : "";
+    if (!email || !password) return json({ error: "invalid_request", error_description: "Email and password are required." }, 400);
+    const signedIn = await signInWithPassword(config, email, password);
+    if (!signedIn) return json({ error: "invalid_credentials", error_description: "Email or password not accepted." }, 401);
+    const sessionToken = `smn_web_${randomBytes(24).toString("hex")}`;
+    const inserted = await client.from("web_sessions")
+      .insert({ session_hash: sha256Hex(sessionToken), user_id: signedIn })
+      .select("expires_at")
+      .single();
+    if (inserted.error) return json({ error: "server_error", error_description: "Could not start a session." }, 500);
+    return json({ sessionToken, expiresAt: inserted.data.expires_at }, 201);
+  }
+
   // Everything else acts on an existing account. Bearer resolves it; minting
   // a token may alternatively present the account password (recovery).
   let body: Record<string, unknown> | null = null;
@@ -90,9 +112,28 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   let owner = await resolveBearerOwner(request, env);
   if (!owner && request.method === "POST" && resource === "tokens" && !id
     && typeof body?.email === "string" && typeof body?.password === "string") {
+    // A password verification with no bearer is an unauthenticated credential
+    // check — gate it per-IP exactly like /session, or this door is an
+    // unthrottled password oracle that also mints a durable connector token.
+    const guard = await checkHostedRateLimit(client, rules.oauthTokenPerIp, clientIpFromHeaders(request.headers));
+    if (!guard.allowed) return withCors(rateLimitedResponse(guard, "password"));
     owner = await signInWithPassword(config, (body.email as string).trim().toLowerCase(), body.password as string);
   }
   if (!owner) return json({ error: "unauthorized" }, 401);
+
+  // The presenting web session's hash, when the bearer is one — lets
+  // change-password spare the current tab while revoking the rest, and lets
+  // sign-out revoke exactly this session.
+  const bearer = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  const currentSessionHash = bearer.startsWith("smn_web_") ? sha256Hex(bearer) : undefined;
+
+  if (request.method === "POST" && resource === "signout" && !id) {
+    if (currentSessionHash) {
+      await client.from("web_sessions").update({ revoked_at: new Date().toISOString() })
+        .eq("session_hash", currentSessionHash).is("revoked_at", null);
+    }
+    return json({ ok: true });
+  }
 
   // Companion reads poll; they run on their own generous budget so the
   // account-operation allowance stays for operations.
@@ -107,6 +148,8 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   if (request.method === "POST" && resource === "invites" && !id) return issueInvite(client, owner, body ?? {});
   if (request.method === "POST" && resource === "invites" && id && action === "revoke") return revokeInvite(client, owner, id);
   if (request.method === "GET" && resource === "usage" && !id) return usage(client, owner);
+  if (request.method === "GET" && resource === "profile" && !id) return profile(client, owner);
+  if (request.method === "POST" && resource === "password" && !id) return changePassword(client, owner, body ?? {}, currentSessionHash);
   if (request.method === "GET" && resource === "seminars" && !id) return listSeminars(client, owner);
   if (request.method === "GET" && resource === "seminars" && id && !action) return seminarDetail(client, owner, id, new URL(request.url).searchParams);
   if (request.method === "POST" && resource === "seminars" && id && action === "title") return renameSeminar(client, owner, id, body ?? {});
@@ -295,6 +338,36 @@ async function mintSyndicationCode(client: SupabaseClient, owner: string, body: 
     return json({ error: limited ? "pilot_limit" : "server_error", error_description: insert.error.message }, limited ? 400 : 500);
   }
   return json({ syndicationCodeId: insert.data.id, code, expiresAt: insert.data.expires_at, maxUses }, 201);
+}
+
+// The signed-in account's own identity, for the Account section.
+async function profile(client: SupabaseClient, owner: string): Promise<Response> {
+  const { data } = await client.auth.admin.getUserById(owner);
+  return json({ email: data?.user?.email ?? null });
+}
+
+// Change the account password. The bearer (connector token or web session)
+// is the proof of identity — it already grants full account access, so this
+// adds no privilege. The new password travels only in the request body over
+// HTTPS, is set via Supabase's admin API, and is never logged or echoed;
+// failures return a generic message so nothing about the account leaks.
+async function changePassword(client: SupabaseClient, owner: string, body: Record<string, unknown>, currentSessionHash?: string): Promise<Response> {
+  const password = typeof body.newPassword === "string" ? body.newPassword : "";
+  if (password.length < 8 || password.length > 200) {
+    return json({ error: "invalid_request", error_description: "The new password must be 8 to 200 characters." }, 400);
+  }
+  const updated = await client.auth.admin.updateUserById(owner, { password });
+  if (updated.error) return json({ error: "server_error", error_description: "The password could not be updated." }, 500);
+  // A password change is often a response to a suspected compromise, so it
+  // must cut off every OTHER web session immediately (the current tab is
+  // spared so the user is not bounced mid-change). Connector tokens are
+  // deliberate long-lived credentials with their own revoke controls and are
+  // left untouched.
+  let revoke = client.from("web_sessions").update({ revoked_at: new Date().toISOString() })
+    .eq("user_id", owner).is("revoked_at", null);
+  if (currentSessionHash) revoke = revoke.neq("session_hash", currentSessionHash);
+  await revoke;
+  return json({ ok: true });
 }
 
 async function emailsFor(client: SupabaseClient, userIds: string[]): Promise<Map<string, string>> {

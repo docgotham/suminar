@@ -54,3 +54,42 @@ describe("account handler shape", () => {
     expect(body.error).toBe("server_error");
   });
 });
+
+// Password auth surface: the security-relevant response shapes, pinned
+// offline against an unreachable Supabase (rate limiter fails open; the
+// credential check fails closed to null).
+describe("password sign-in and change-password shapes", () => {
+  const FAKE_ENV = { SUPABASE_URL: "http://127.0.0.1:1", SUPABASE_SERVICE_ROLE_KEY: "test" } as unknown as NodeJS.ProcessEnv;
+
+  it("session minting validates the body before touching credentials", async () => {
+    const response = await handleHostedAccountRequest(new Request("http://local/api/account/session", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }), FAKE_ENV);
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error_description: string };
+    expect(body.error_description).toContain("Email and password");
+  });
+
+  it("bad credentials get one indistinct 401 — no account enumeration", async () => {
+    const response = await handleHostedAccountRequest(new Request("http://local/api/account/session", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "nobody@example.com", password: "wrong-password" }),
+    }), FAKE_ENV);
+    expect(response.status).toBe(401);
+    const body = await response.json() as { error_description: string };
+    expect(body.error_description).toBe("Email or password not accepted.");
+  });
+
+  it("change-password sits behind the bearer wall", async () => {
+    const response = await handleHostedAccountRequest(new Request("http://local/api/account/password", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ newPassword: "a-long-enough-password" }),
+    }), FAKE_ENV);
+    expect(response.status).toBe(401);
+  });
+
+  it("profile sits behind the bearer wall", async () => {
+    const response = await handleHostedAccountRequest(new Request("http://local/api/account/profile"), FAKE_ENV);
+    expect(response.status).toBe(401);
+  });
+});

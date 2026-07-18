@@ -38,6 +38,7 @@ interface AuthorizationCodeRow {
 }
 
 const ACCESS_PREFIX = "smn_oat_";
+export const WEB_SESSION_PREFIX = "smn_web_";
 const REFRESH_PREFIX = "smn_ort_";
 
 export function readHostedOAuthEnv(env: NodeJS.ProcessEnv = process.env): HostedOAuthEnv | null {
@@ -94,6 +95,20 @@ export async function resolveBearerOwner(request: Request, env: NodeJS.ProcessEn
     if (new Date(data.access_expires_at as string).getTime() <= Date.now()) return null;
     if (!sameResource(data.resource as string, hostedOAuthResourceUrl(request))) return null;
     await client.from("oauth_access_tokens").update({ last_used_at: new Date().toISOString() }).eq("token_hash", sha256(token));
+    return data.user_id as string;
+  }
+
+  // Web session: a short-lived bearer minted by password sign-in on the
+  // account page. Hash-at-rest, expiring, revocable.
+  if (token.startsWith(WEB_SESSION_PREFIX)) {
+    const { data, error } = await client
+      .from("web_sessions")
+      .select("user_id, expires_at, revoked_at")
+      .eq("session_hash", sha256(token))
+      .maybeSingle();
+    if (error || !data || data.revoked_at) return null;
+    if (new Date(data.expires_at as string).getTime() <= Date.now()) return null;
+    await client.from("web_sessions").update({ last_used_at: new Date().toISOString() }).eq("session_hash", sha256(token));
     return data.user_id as string;
   }
 
