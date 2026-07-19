@@ -23,6 +23,38 @@ export function isGrantToken(token: string): boolean {
   return GRANT_TOKEN_PATTERN.test(token);
 }
 
+const CARRIER_MAX = 48;
+
+// A carrier client's self-asserted name (an OAuth client_name or a connector-
+// token name), made safe for a grant label: whitespace-collapsed, trimmed, and
+// capped so the composed label stays within the 80-char column. Null when
+// there's nothing usable, so callers fall back to the generic wording rather
+// than showing "via ". Treated as untrusted display text, never as identity.
+export function boundedCarrierName(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const cleaned = raw.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  // Truncate on code-point boundaries, not UTF-16 units: a naive slice can
+  // bisect an astral surrogate pair (an emoji at the cut), and the resulting
+  // lone surrogate is invalid UTF-8 that Postgres rejects. Counting code
+  // points also matches char_length, the unit the 80-char column enforces.
+  const points = [...cleaned];
+  if (points.length <= CARRIER_MAX) return cleaned;
+  return `${points.slice(0, CARRIER_MAX - 1).join("").trimEnd()}…`;
+}
+
+// Grant labels for the "Connected chats" pills. When the carrier is known the
+// pill names the chatbot; when it isn't, the label is EXACTLY the pre-carrier
+// wording — an unresolved carrier is a clean no-op, never a regression.
+export function grantOriginLabel(carrier: string | null): string {
+  return carrier ?? "Origin thread";
+}
+
+export function grantResumeLabel(carrier: string | null, isoDate: string): string {
+  const day = isoDate.slice(0, 10);
+  return carrier ? `Resumed via ${carrier} · ${day}` : `Resumed ${day}`;
+}
+
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -96,7 +128,9 @@ export class GrantResolvingStore implements ConversationStore {
   constructor(
     private readonly inner: ConversationStore,
     private readonly grants: GrantDirectory,
-    private readonly originLabel: string = "Origin thread",
+    // A string, or a lazy resolver invoked only when a conversation is actually
+    // born — so the carrier lookup runs on create, never on every append.
+    private readonly originLabel: string | (() => Promise<string>) = "Origin thread",
   ) {}
 
   private async resolution(token: string): Promise<ResolvedGrant | null> {
@@ -119,11 +153,12 @@ export class GrantResolvingStore implements ConversationStore {
     // the raw token never travels. Minting is an enhancement: if it fails,
     // the conversation still works on the raw token (pre-A2 behavior).
     try {
-      const minted = await this.grants.mint(session.conversationToken, this.originLabel);
+      const label = typeof this.originLabel === "function" ? await this.originLabel() : this.originLabel;
+      const minted = await this.grants.mint(session.conversationToken, label);
       this.resolved.set(minted.grantToken, {
         id: minted.id,
         conversationToken: session.conversationToken,
-        label: this.originLabel,
+        label,
       });
       return { ...session, conversationToken: minted.grantToken };
     } catch {

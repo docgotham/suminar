@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GrantResolvingStore, isGrantToken } from "../src/hosted/grants.js";
+import { boundedCarrierName, grantOriginLabel, grantResumeLabel, GrantResolvingStore, isGrantToken } from "../src/hosted/grants.js";
 import type { GrantDirectory, ResolvedGrant } from "../src/hosted/grants.js";
 import type { ConversationStore } from "../src/core/storage.js";
 import type { ConversationEvent, ConversationSession } from "../src/core/types.js";
@@ -130,6 +130,42 @@ describe("isGrantToken", () => {
   });
 });
 
+describe("grant label helpers", () => {
+  it("bounds a carrier name: trims, collapses whitespace, caps, and nulls the empty", () => {
+    expect(boundedCarrierName("  Claude   Desktop ")).toBe("Claude Desktop");
+    expect(boundedCarrierName("   ")).toBeNull();
+    expect(boundedCarrierName(null)).toBeNull();
+    expect(boundedCarrierName(undefined)).toBeNull();
+    const bounded = boundedCarrierName("x".repeat(60));
+    expect(bounded).not.toBeNull();
+    expect(bounded!.length).toBeLessThanOrEqual(48);
+    expect(bounded!.endsWith("…")).toBe(true);
+  });
+
+  it("builds origin and resume labels, falling back cleanly when the carrier is unknown", () => {
+    expect(grantOriginLabel("Claude")).toBe("Claude");
+    expect(grantOriginLabel(null)).toBe("Origin thread");
+    expect(grantResumeLabel("ChatGPT", "2026-07-19T12:34:56.000Z")).toBe("Resumed via ChatGPT · 2026-07-19");
+    expect(grantResumeLabel(null, "2026-07-19T12:34:56.000Z")).toBe("Resumed 2026-07-19");
+  });
+
+  it("keeps the composed resume label within the 80-char grant column even at max carrier length", () => {
+    const carrier = boundedCarrierName("y".repeat(100));
+    const label = grantResumeLabel(carrier, "2026-07-19T00:00:00.000Z");
+    expect([...label].length).toBeLessThanOrEqual(80);
+  });
+
+  it("truncates on code-point boundaries, never leaving a lone surrogate an emoji at the cut would", () => {
+    // The 😀 straddles the 47th UTF-16 unit; a naive slice would split its pair.
+    const bounded = boundedCarrierName("a".repeat(46) + "😀" + "b".repeat(20));
+    expect(bounded).not.toBeNull();
+    // A lone surrogate is invalid UTF-8, so a round-trip would corrupt it —
+    // this is exactly the byte sequence Postgres would reject on insert.
+    expect(Buffer.from(bounded!, "utf8").toString("utf8")).toBe(bounded);
+    expect([...bounded!].length).toBeLessThanOrEqual(48);
+  });
+});
+
 describe("GrantResolvingStore", () => {
   it("passes raw conversation tokens straight through", async () => {
     const inner = new FakeInnerStore();
@@ -170,6 +206,25 @@ describe("GrantResolvingStore", () => {
     const session = await store.createConversation();
     expect(isGrantToken(session.conversationToken)).toBe(false);
     expect(session.conversationToken.startsWith("conv_")).toBe(true);
+  });
+
+  it("resolves an async origin-label thunk once, at birth, and stamps it on the grant", async () => {
+    const inner = new FakeInnerStore();
+    const grants = new FakeGrantDirectory();
+    let calls = 0;
+    const store = new GrantResolvingStore(inner, grants, async () => { calls++; return "Claude"; });
+
+    const session = await store.createConversation();
+    expect(isGrantToken(session.conversationToken)).toBe(true);
+    expect(grants.minted[0]!.label).toBe("Claude");
+    expect(calls).toBe(1);
+
+    // Appends never re-invoke the resolver — the carrier lookup is birth-only.
+    await store.appendConversationEvent(session.conversationToken, {
+      sequence: 1, speakerType: "user", speakerDisplayName: "User",
+      authoredMessage: "hi", fidelity: "model_copied_unverified",
+    });
+    expect(calls).toBe(1);
   });
 
   it("resolves a grant token for the inner store while echoing the grant to the caller", async () => {

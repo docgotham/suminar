@@ -118,6 +118,38 @@ export async function resolveBearerOwner(request: Request, env: NodeJS.ProcessEn
   return (data as { userId?: string }).userId ?? null;
 }
 
+// Display-only: the human name of the client carrying THIS request, for the
+// "Connected chats" grant pills. It runs AFTER resolveBearerOwner has already
+// authenticated the same bearer — it NEVER gates access, and any miss returns
+// null so grant labels fall back to their generic wording. It deliberately
+// re-reads the bearer rather than threading it, so the security-critical
+// resolver above stays byte-for-byte untouched. Client and token names are
+// self-asserted, so the result is untrusted display text (the caller bounds
+// it; the surface renders it as textContent) and never an identity.
+export async function carrierLabelForRequest(request: Request, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  const token = readBearerToken(request.headers.get("authorization"));
+  if (!token) return null;
+  const config = readHostedOAuthEnv(env);
+  if (!config) return null;
+  const client = createHostedOAuthClient(config);
+  try {
+    if (token.startsWith(ACCESS_PREFIX)) {
+      const tokenRow = await client.from("oauth_access_tokens").select("client_id").eq("token_hash", sha256(token)).maybeSingle();
+      const clientId = (tokenRow.data as { client_id?: string } | null)?.client_id;
+      if (!clientId) return null;
+      const clientRow = await client.from("oauth_clients").select("client_name").eq("client_id", clientId).maybeSingle();
+      return (clientRow.data as { client_name?: string | null } | null)?.client_name ?? null;
+    }
+    // A web session is the account website, not a chatbot — no chatbot name to
+    // show, so fall back to the generic label.
+    if (token.startsWith(WEB_SESSION_PREFIX)) return null;
+    const conn = await client.from("connector_tokens").select("name").eq("token_hash", sha256(token.trim())).is("revoked_at", null).maybeSingle();
+    return (conn.data as { name?: string | null } | null)?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleHostedOAuthRequest(request: Request, env: NodeJS.ProcessEnv = process.env): Promise<Response> {
   const url = new URL(request.url);
   let pathname = normalizePathname(url.pathname);

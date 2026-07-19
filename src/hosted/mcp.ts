@@ -6,12 +6,13 @@ import type { ResumeSeminarResult } from "../suminar/mcp.js";
 import { createSuminarConversationService } from "../suminar/service.js";
 import { loadConfig } from "../suminar/config.js";
 import { SupabaseStore } from "./supabaseStore.js";
-import { GrantResolvingStore, SupabaseGrantDirectory } from "./grants.js";
+import { boundedCarrierName, grantOriginLabel, grantResumeLabel, GrantResolvingStore, SupabaseGrantDirectory } from "./grants.js";
 import type { GrantDirectory } from "./grants.js";
 import { SupabaseArtifactReader } from "./supabaseArtifacts.js";
 import { MeteredLocalInvoker } from "./metering.js";
 import { checkHostedRateLimit, hostedRateLimitRules, rateLimitedResponse } from "./ratelimit.js";
 import {
+  carrierLabelForRequest,
   createHostedOAuthClient,
   hostedMcpUnauthorizedResponse,
   readHostedOAuthEnv,
@@ -52,7 +53,7 @@ function methodNotAllowed(): Response {
 // the code's owner must be the authenticated account (cross-account
 // participation is increment B, with its own identity model). One-use is
 // enforced with a race-safe conditional update.
-async function redeemResumeCode(client: SupabaseClient, owner: string, code: string, grants: GrantDirectory): Promise<ResumeSeminarResult | null> {
+async function redeemResumeCode(client: SupabaseClient, owner: string, code: string, grants: GrantDirectory, carrier: () => Promise<string | null>): Promise<ResumeSeminarResult | null> {
   if (!/^smn_res_[a-f0-9]{16,}$/i.test(code)) return null;
   const hash = createHash("sha256").update(code, "utf8").digest("hex");
   const row = await client.from("seminar_resume_codes")
@@ -96,7 +97,8 @@ async function redeemResumeCode(client: SupabaseClient, owner: string, code: str
   // its enhancement.
   let continuation = token;
   try {
-    continuation = (await grants.mint(token, `Resumed ${new Date().toISOString().slice(0, 10)}`)).grantToken;
+    const label = grantResumeLabel(await carrier(), new Date().toISOString());
+    continuation = (await grants.mint(token, label)).grantToken;
   } catch {
     // pre-A2 behavior remains the floor
   }
@@ -146,13 +148,18 @@ export async function handleHostedMcpRequest(request: Request, env: NodeJS.Proce
   // Grants resolve at the store boundary: hosts hold revocable convg_
   // credentials while the raw conversation token stays server-side.
   const grants = new SupabaseGrantDirectory(client, owner);
-  const store = new GrantResolvingStore(new SupabaseStore(client, owner), grants);
+  // The carrier chatbot's bounded name, resolved LAZILY — only when a grant is
+  // actually minted (conversation birth or resume), never on the common
+  // append/read path. Display-only and post-auth: a miss yields null, and the
+  // grant-label builders fall back to their pre-carrier wording.
+  const carrier = () => carrierLabelForRequest(request, env).then(boundedCarrierName);
+  const store = new GrantResolvingStore(new SupabaseStore(client, owner), grants, () => carrier().then(grantOriginLabel));
   const service = createSuminarConversationService(loadConfig(), store, {
     artifactReader: new SupabaseArtifactReader(client),
     wrapLocalInvoker: (invoker) => new MeteredLocalInvoker(invoker, client, owner),
   });
   const server = createSuminarMcpServer(service, {
-    resumeSeminar: (code) => redeemResumeCode(client, owner, code, grants),
+    resumeSeminar: (code) => redeemResumeCode(client, owner, code, grants, carrier),
   });
   // JSON response mode is load-bearing: in SSE mode handleRequest resolves
   // before the JSON-RPC reply is written to the stream, so the close() below
