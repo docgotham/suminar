@@ -126,6 +126,12 @@
   .meter { height: .45rem; border-radius: 999px; background: var(--accent-tint); overflow: hidden; margin: .3rem 0 .1rem; }
   .meter > div { height: 100%; background: var(--accent); border-radius: 999px; }
   .usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 1.25rem; }
+  /* Connect-a-chatbot guide in the account rail: endpoint + per-client steps. */
+  #connect .endpoint { display: block; font-family: Consolas, ui-monospace, monospace; font-size: .8125rem; background: var(--accent-tint); border: 1px solid var(--line); border-radius: 4px; padding: .45rem .6rem; margin: 0 0 1rem; word-break: break-all; }
+  #connect h4 { margin: .8rem 0 .25rem; font-size: .84rem; }
+  #connect ol { margin: 0 0 .7rem; padding-left: 1.15rem; font-size: .84rem; color: var(--mut); line-height: 1.55; }
+  #connect ol li { margin: .14rem 0; }
+  #connect ol code, #connect p code { font-family: Consolas, ui-monospace, monospace; font-size: .82em; background: var(--accent-tint); border-radius: 3px; padding: .05rem .3rem; word-break: break-word; }
   .usage-grid .num { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .usage-grid .cap { font-size: .78rem; color: var(--mut); }
   details.recover { margin-top: 1.4rem; border-top: 1px solid var(--line); padding-top: 1rem; }
@@ -310,6 +316,54 @@
       </div>
 
       <aside class="rail">
+      <details class="card util" id="connect" open>
+        <summary>Connect a chatbot</summary>
+        <p class="sub" style="margin:.75rem 0 .8rem">Suminar works inside the AI you
+        already use. Add it once as a remote MCP connector, then address your source
+        agents by handle. Point any client at this endpoint:</p>
+        <code class="endpoint">https://suminar.ai/mcp</code>
+
+        <h4>Claude</h4>
+        <ol>
+          <li>Settings → Connectors → Add custom connector.</li>
+          <li>Name it Suminar, paste the endpoint above, and leave the OAuth fields blank.</li>
+          <li>Click Connect, then sign in with your Suminar email and password.</li>
+        </ol>
+
+        <h4>ChatGPT</h4>
+        <ol>
+          <li>Settings → Plugins → add a new MCP server.</li>
+          <li>Paste the endpoint above and approve the sign-in prompt.</li>
+        </ol>
+
+        <h4>Claude Code</h4>
+        <ol>
+          <li>In a terminal: <code>claude mcp add --transport http suminar https://suminar.ai/mcp</code></li>
+          <li>The first use opens a browser sign-in — approve it and you&rsquo;re connected.</li>
+          <li>Prefer a key? Mint a connector token below and pass it as <code>--header &quot;Authorization: Bearer suminar_…&quot;</code></li>
+        </ol>
+
+        <h4>Cursor</h4>
+        <ol>
+          <li>Settings → MCP (or edit <code>~/.cursor/mcp.json</code>) and add a server with the endpoint above.</li>
+          <li>Approve the sign-in prompt when Cursor first connects.</li>
+        </ol>
+
+        <h4>Perplexity</h4>
+        <ol>
+          <li>Mint a connector token below and copy it.</li>
+          <li>Add a connector with the endpoint above; where it asks for authentication, send <code>Authorization: Bearer suminar_…</code></li>
+        </ol>
+
+        <h4>Any other MCP client</h4>
+        <ol>
+          <li>Suminar is a standard remote MCP server (streamable HTTP). If your client speaks OAuth it walks you through sign-in; if not, mint a connector token below and send it as an <code>Authorization: Bearer</code> header.</li>
+        </ol>
+
+        <p class="sub" style="margin:.5rem 0 0">Then, in your own chat, address a source
+        agent by handle — for example <span class="handlechip">@loury-foreword What does the Foreword argue?</span></p>
+      </details>
+
       <details class="card util">
         <summary>Connected apps <span class="railstat" id="conn-stat"></span></summary>
         <p class="sub" style="margin-bottom:.9rem">Chatbots that signed in with
@@ -319,7 +373,7 @@
           <thead><tr><th>App</th><th>Signs in via</th><th>Authorized</th><th>Last used</th><th></th></tr></thead>
           <tbody></tbody>
         </table></div>
-        <p class="empty" id="conn-empty" hidden>No chatbot holds OAuth access.</p>
+        <p class="empty" id="conn-empty" hidden>No chatbot holds OAuth access yet — see &ldquo;Connect a chatbot&rdquo; above to add one.</p>
         <p class="status" id="conn-status" role="status"></p>
       </details>
 
