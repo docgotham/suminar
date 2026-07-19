@@ -92,4 +92,22 @@ describe("public claims stay pinned to code", () => {
       expect(html).not.toMatch(/analytics|gtag|posthog|plausible|segment/i);
     }
   });
+
+  it("the site answers why-free without money talk, and members are not research material", async () => {
+    // Family framing decision (2026-07-19, shared with Mem·Sum): the pilot is
+    // free because it is a UX playground, and that answer never mentions
+    // money — no prices, no plans, no someday. The same section states the
+    // consent boundary in plain words: member sources are not research
+    // material, backed by the content-blind claim of record above it.
+    const page = await read("site", "index.html");
+    expect(page).toContain('id="why-free"');
+    expect(page).toContain("UX playground");
+    expect(page).toContain("Dave Gilbert");
+    expect(page).toContain('href="https://aftertheapp.com/"');
+    expect(page).toMatch(/your\s+sources and seminars are not research material/);
+    expect(page).toMatch(/No one reads what you upload —\s+not even Dave/);
+    expect(page).toMatch(/content-blind by construction/);
+    expect(page).toContain('href="#trust"');
+    expect(page).not.toMatch(/\$\d|price|pricing|paid|monetiz|subscription/i);
+  });
 });
