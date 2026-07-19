@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { handleHostedAccountRequest, validateSignupInput, validateTokenName } from "../src/hosted/account.js";
+import {
+  aggregateConnectedApps,
+  handleHostedAccountRequest,
+  redirectHostsFromUris,
+  validateSignupInput,
+  validateTokenName,
+} from "../src/hosted/account.js";
 
 describe("signup validation", () => {
   it("accepts a complete signup and normalizes the email", () => {
@@ -37,6 +43,56 @@ describe("token name validation", () => {
     expect(validateTokenName("   ")).toBe("Connector token");
     expect(validateTokenName("  Claude Desktop ")).toBe("Claude Desktop");
     expect(validateTokenName("x".repeat(300))).toHaveLength(120);
+  });
+});
+
+describe("connected apps aggregation", () => {
+  it("folds tokens into one entry per client, newest authorization first", () => {
+    const tokens = [
+      { client_id: "smn_client_a", created_at: "2026-07-10T00:00:00Z", last_used_at: "2026-07-18T00:00:00Z" },
+      { client_id: "smn_client_a", created_at: "2026-07-08T00:00:00Z", last_used_at: null },
+      { client_id: "smn_client_b", created_at: "2026-07-15T00:00:00Z", last_used_at: null },
+    ];
+    const clients = [
+      { client_id: "smn_client_a", client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] },
+      { client_id: "smn_client_b", client_name: "ChatGPT", redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"] },
+    ];
+    const result = aggregateConnectedApps(tokens, clients);
+    // b's authorization (07-15) outranks a's earliest (07-08).
+    expect(result.map((row) => row.clientId)).toEqual(["smn_client_b", "smn_client_a"]);
+    const a = result.find((row) => row.clientId === "smn_client_a");
+    expect(a).toMatchObject({
+      clientName: "Claude",
+      activeTokens: 2,
+      authorizedAt: "2026-07-08T00:00:00Z",
+      lastUsedAt: "2026-07-18T00:00:00Z",
+    });
+    expect(a?.redirectHosts).toEqual(["claude.ai"]);
+  });
+
+  it("never trusts a missing or hostile client name; anchors on the redirect host", () => {
+    const result = aggregateConnectedApps(
+      [{ client_id: "smn_client_x", created_at: "2026-07-01T00:00:00Z", last_used_at: null }],
+      [{ client_id: "smn_client_x", client_name: "  ", redirect_uris: ["not a url", "ftp://x/y"] }],
+    );
+    expect(result[0].clientName).toBe("Connected app");
+    expect(result[0].redirectHosts).toEqual(["external application"]);
+  });
+
+  it("labels an orphan token (client row missing) without throwing", () => {
+    const result = aggregateConnectedApps(
+      [{ client_id: "smn_client_gone", created_at: "2026-07-01T00:00:00Z", last_used_at: null }],
+      [],
+    );
+    expect(result[0]).toMatchObject({ clientName: "Connected app", redirectHosts: [], activeTokens: 1 });
+  });
+});
+
+describe("redirect host extraction", () => {
+  it("keeps http(s) hosts, dedupes, and collapses the rest to a safe placeholder", () => {
+    expect(redirectHostsFromUris(["https://claude.ai/cb", "https://claude.ai/other"])).toEqual(["claude.ai"]);
+    expect(redirectHostsFromUris(["javascript:alert(1)"])).toEqual(["external application"]);
+    expect(redirectHostsFromUris([])).toEqual([]);
   });
 });
 

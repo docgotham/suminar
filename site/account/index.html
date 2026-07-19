@@ -311,6 +311,19 @@
 
       <aside class="rail">
       <details class="card util">
+        <summary>Connected apps <span class="railstat" id="conn-stat"></span></summary>
+        <p class="sub" style="margin-bottom:.9rem">Chatbots that signed in with
+        your account (OAuth). Revoking one signs it out at once — your seminars
+        and sources stay put. Paste-in keys live under Connector tokens, below.</p>
+        <div class="tablewrap"><table id="conn-table" hidden>
+          <thead><tr><th>App</th><th>Signs in via</th><th>Authorized</th><th>Last used</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p class="empty" id="conn-empty" hidden>No chatbot holds OAuth access.</p>
+        <p class="status" id="conn-status" role="status"></p>
+      </details>
+
+      <details class="card util">
         <summary>Connector tokens <span class="railstat" id="tok-stat"></span></summary>
         <div class="tablewrap"><table id="tok-table" hidden>
           <thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
@@ -452,7 +465,7 @@
     try { sessionStorage.setItem("suminar_token", token); } catch {}
     gate.hidden = true; dash.hidden = false; signout.hidden = false;
     $("companion-controls").hidden = false;
-    await Promise.all([loadDocs(), loadTokens(), loadInvites(), loadUsage(), loadProfile()]).catch(() => {});
+    await Promise.all([loadDocs(), loadTokens(), loadConnections(), loadInvites(), loadUsage(), loadProfile()]).catch(() => {});
     focusRedeemIfRequested();
   }
 
@@ -1126,6 +1139,36 @@
   $("tok-copy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($("tok-new").textContent); $("tok-copy").textContent = "Copied"; } catch {}
   });
+
+  // ---- connected apps (OAuth clients) ----
+  async function loadConnections() {
+    const body = await api("/api/account/connections");
+    const rows = body.connections || [];
+    $("conn-stat").textContent = rows.length ? rows.length + (rows.length === 1 ? " app" : " apps") : "";
+    const table = $("conn-table"), tbody = table.querySelector("tbody");
+    tbody.replaceChildren();
+    $("conn-empty").hidden = rows.length > 0;
+    table.hidden = rows.length === 0;
+    for (const app of rows) {
+      const tr = el("tr");
+      tr.append(el("td", {}, app.clientName));
+      tr.append(el("td", {}, (app.redirectHosts || []).join(", ") || "—"));
+      tr.append(el("td", { class: "num" }, fmtDate(app.authorizedAt)));
+      tr.append(el("td", { class: "num" }, fmtDate(app.lastUsedAt)));
+      const actions = el("td");
+      const revoke = el("button", { class: "danger", type: "button" }, "Revoke");
+      revoke.addEventListener("click", async () => {
+        if (!confirm('Revoke "' + app.clientName + '"? It signs out at once and must ask for your consent again to reconnect.')) return;
+        try {
+          await api("/api/account/connections/" + encodeURIComponent(app.clientId) + "/revoke", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          await loadConnections();
+        } catch (error) { setStatus("conn-status", error.message, true); }
+      });
+      actions.append(revoke);
+      tr.append(actions);
+      tbody.append(tr);
+    }
+  }
 
   // ---- invites ----
   async function loadInvites() {

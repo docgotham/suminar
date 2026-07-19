@@ -66,6 +66,63 @@ export function validateTokenName(value: unknown): string {
   return name.length ? name.slice(0, 120) : "Connector token";
 }
 
+export interface ConnectedApp {
+  clientId: string;
+  clientName: string;
+  redirectHosts: string[];
+  authorizedAt: string;
+  lastUsedAt: string | null;
+  activeTokens: number;
+}
+
+// A dynamically registered client names itself, so the name alone proves
+// nothing. Its registered redirect hosts are the reliable anchor — that is
+// what the account page shows beside the self-asserted name.
+export function redirectHostsFromUris(uris: readonly string[]): string[] {
+  const hosts = new Set<string>();
+  for (const uri of uris) {
+    try {
+      const url = new URL(uri);
+      hosts.add(url.protocol === "https:" || url.protocol === "http:" ? url.host : "external application");
+    } catch {
+      hosts.add("external application");
+    }
+  }
+  return [...hosts];
+}
+
+// Fold the live access-token rows into one entry per client — the member
+// thinks in "which chatbot," not "which token." Pure so the shape is tested
+// without IO, in the house style of the naming helpers.
+export function aggregateConnectedApps(
+  tokenRows: ReadonlyArray<{ client_id: string; created_at: string; last_used_at: string | null }>,
+  clientRows: ReadonlyArray<{ client_id: string; client_name: string | null; redirect_uris: string[] | null }>,
+): ConnectedApp[] {
+  const clients = new Map(clientRows.map((row) => [row.client_id, row]));
+  const byClient = new Map<string, ConnectedApp>();
+  for (const token of tokenRows) {
+    const existing = byClient.get(token.client_id);
+    if (existing) {
+      existing.activeTokens += 1;
+      if (token.created_at < existing.authorizedAt) existing.authorizedAt = token.created_at;
+      if (token.last_used_at && (!existing.lastUsedAt || token.last_used_at > existing.lastUsedAt)) {
+        existing.lastUsedAt = token.last_used_at;
+      }
+      continue;
+    }
+    const client = clients.get(token.client_id);
+    byClient.set(token.client_id, {
+      clientId: token.client_id,
+      clientName: client?.client_name?.trim() || "Connected app",
+      redirectHosts: redirectHostsFromUris(client?.redirect_uris ?? []),
+      authorizedAt: token.created_at,
+      lastUsedAt: token.last_used_at ?? null,
+      activeTokens: 1,
+    });
+  }
+  return [...byClient.values()].sort((a, b) => (a.authorizedAt < b.authorizedAt ? 1 : -1));
+}
+
 export async function handleHostedAccountRequest(request: Request, env: NodeJS.ProcessEnv = process.env): Promise<Response> {
   if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
   const config = readHostedOAuthEnv(env);
@@ -215,6 +272,8 @@ export async function handleHostedAccountRequest(request: Request, env: NodeJS.P
   if (request.method === "GET" && resource === "tokens" && !id) return listTokens(client, owner);
   if (request.method === "POST" && resource === "tokens" && !id) return mintToken(client, owner, body ?? {});
   if (request.method === "DELETE" && resource === "tokens" && id && !action) return revokeToken(client, owner, id);
+  if (request.method === "GET" && resource === "connections" && !id) return listConnections(client, owner);
+  if (request.method === "POST" && resource === "connections" && id && action === "revoke") return revokeConnection(client, owner, id);
   if (request.method === "GET" && resource === "invites" && !id) return listInvites(client, owner);
   if (request.method === "POST" && resource === "invites" && !id) return issueInvite(client, owner, body ?? {});
   if (request.method === "POST" && resource === "invites" && id && action === "revoke") return revokeInvite(client, owner, id);
@@ -677,6 +736,50 @@ async function revokeToken(client: SupabaseClient, owner: string, tokenId: strin
   if (update.error) return json({ error: "server_error", error_description: update.error.message }, 500);
   if (!update.data?.length) return json({ error: "not_found" }, 404);
   return json({ revoked: true, tokenId });
+}
+
+// Connected apps: the OAuth chatbot clients that signed in with this account —
+// the account-scoped sibling of the connector-token list. Read is aggregated
+// by client (one entry per chatbot, not per token); owner-scoped on every
+// query, the tenant wall exactly as the token handlers.
+async function listConnections(client: SupabaseClient, owner: string): Promise<Response> {
+  const tokens = await client.from("oauth_access_tokens")
+    .select("client_id, created_at, last_used_at")
+    .eq("user_id", owner)
+    .is("revoked_at", null)
+    .gt("refresh_expires_at", new Date().toISOString());
+  if (tokens.error) return json({ error: "server_error", error_description: tokens.error.message }, 500);
+  const rows = (tokens.data ?? []) as Array<{ client_id: string; created_at: string; last_used_at: string | null }>;
+  if (!rows.length) return json({ connections: [] });
+  const clientIds = [...new Set(rows.map((row) => row.client_id))];
+  const clients = await client.from("oauth_clients")
+    .select("client_id, client_name, redirect_uris")
+    .in("client_id", clientIds);
+  if (clients.error) return json({ error: "server_error", error_description: clients.error.message }, 500);
+  const clientRows = (clients.data ?? []) as Array<{ client_id: string; client_name: string | null; redirect_uris: string[] | null }>;
+  return json({ connections: aggregateConnectedApps(rows, clientRows) });
+}
+
+// Revoke every live token for one client, then close any in-flight
+// authorization code so a code minted before the revoke can't be exchanged
+// for fresh access after it. 404 when the client owns nothing here, matching
+// revokeToken's honest "no such thing" rather than a hollow success.
+async function revokeConnection(client: SupabaseClient, owner: string, clientId: string): Promise<Response> {
+  const target = clientId.trim();
+  if (!target || target.length > 255) return json({ error: "not_found" }, 404);
+  const tokens = await client.from("oauth_access_tokens")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("user_id", owner).eq("client_id", target).is("revoked_at", null)
+    .select("client_id");
+  if (tokens.error) return json({ error: "server_error", error_description: tokens.error.message }, 500);
+  const revokedTokens = tokens.data?.length ?? 0;
+  if (revokedTokens === 0) return json({ error: "not_found" }, 404);
+  const codes = await client.from("oauth_authorization_codes")
+    .update({ consumed_at: new Date().toISOString() })
+    .eq("user_id", owner).eq("client_id", target).is("consumed_at", null)
+    .select("client_id");
+  if (codes.error) return json({ error: "server_error", error_description: codes.error.message }, 500);
+  return json({ revoked: true, revokedTokens, closedCodes: codes.data?.length ?? 0 });
 }
 
 async function listInvites(client: SupabaseClient, owner: string): Promise<Response> {
